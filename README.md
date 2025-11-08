@@ -55,6 +55,12 @@ project/
 git clone https://github.com/yourusername/SignSpeak.git
 cd SignSpeak
 
+AI TOOLS USED:
+1. DEEP SEEK
+2.CHATGPT
+3.COPILOT
+
+
 **WEBSITE LINK**
 https://signspeak4.netlify.app/
 
