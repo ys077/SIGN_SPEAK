@@ -11,6 +11,7 @@ class SignSpeakApp {
         this.gestureHistory = [];
         this.sessionId = this.generateSessionId();
         this.gestureDetector = new GestureDetector();
+        this.scrollToSection = null; // For storing section to scroll to after navigation
         
         this.init();
     }
@@ -33,6 +34,13 @@ class SignSpeakApp {
         const hamburger = document.getElementById('hamburger');
         const navMenu = document.getElementById('navMenu');
         
+        const closeMobileMenu = () => {
+            if (hamburger && navMenu) {
+                hamburger.classList.remove('active');
+                navMenu.classList.remove('active');
+            }
+        };
+        
         if (hamburger) {
             hamburger.addEventListener('click', () => {
                 hamburger.classList.toggle('active');
@@ -40,14 +48,120 @@ class SignSpeakApp {
             });
         }
 
+        // Close mobile menu when clicking outside
+        document.addEventListener('click', (e) => {
+            if (navMenu && navMenu.classList.contains('active')) {
+                if (!navMenu.contains(e.target) && !hamburger.contains(e.target)) {
+                    closeMobileMenu();
+                }
+            }
+        });
+
         // Handle navigation
         document.addEventListener('click', (e) => {
             if (e.target.classList.contains('nav-link')) {
                 e.preventDefault();
                 const page = e.target.getAttribute('href');
+                
+                // Close mobile menu when a nav link is clicked
+                if (window.innerWidth <= 968) {
+                    closeMobileMenu();
+                }
+                
                 this.navigateTo(page);
             }
         });
+        
+        // Close mobile menu on window resize if it becomes desktop view
+        window.addEventListener('resize', () => {
+            if (window.innerWidth > 968) {
+                closeMobileMenu();
+            }
+        });
+        
+        // Navbar scroll effect
+        const navbar = document.getElementById('navbar');
+        if (navbar) {
+            window.addEventListener('scroll', () => {
+                if (window.scrollY > 50) {
+                    navbar.classList.add('scrolled');
+                } else {
+                    navbar.classList.remove('scrolled');
+                }
+            });
+        }
+        
+        // Handle all button clicks for navigation
+        document.addEventListener('click', (e) => {
+            const link = e.target.closest('a');
+            
+            // Skip if it's a nav-link (handled separately) or form button
+            if (!link || link.classList.contains('nav-link') || link.closest('form')) {
+                return;
+            }
+            
+            const href = link.getAttribute('href');
+            if (!href) return;
+            
+            // Handle hash links (scroll to section)
+            if (href.startsWith('#')) {
+                e.preventDefault();
+                const targetId = href.substring(1);
+                const currentHash = window.location.hash.substring(1);
+                
+                // Check if we're already on home page
+                if (currentHash === 'home' || currentHash === '' || !currentHash) {
+                    const targetElement = document.getElementById(targetId);
+                    if (targetElement) {
+                        targetElement.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start'
+                        });
+                        // Update URL to maintain home hash
+                        window.history.pushState(null, '', '#home');
+                    }
+                } else {
+                    // If we're on another page, navigate to home first
+                    // Store the target section to scroll to after navigation
+                    this.scrollToSection = targetId;
+                    this.navigateTo('home');
+                }
+                return;
+            }
+            
+            // Handle internal navigation links (non-hash, non-external)
+            if (!href.startsWith('http') && !href.startsWith('mailto') && !href.startsWith('tel')) {
+                e.preventDefault();
+                this.navigateTo(href);
+            }
+        });
+        
+        // Intersection Observer for fade-in animations
+        this.setupScrollAnimations();
+    }
+    
+    setupScrollAnimations() {
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        };
+        
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('fade-in-visible');
+                }
+            });
+        }, observerOptions);
+        
+        // Observe elements after page load
+        setTimeout(() => {
+            const elementsToAnimate = document.querySelectorAll('.feature-card, .stat-item, .mission-content, .about-content-grid, .impact-stat, .community-content');
+            elementsToAnimate.forEach(el => {
+                el.classList.add('fade-in');
+                observer.observe(el);
+            });
+        }, 100);
     }
 
     checkAuthStatus() {
@@ -75,6 +189,27 @@ class SignSpeakApp {
         switch(page) {
             case 'home':
                 mainContent.innerHTML = this.renderHomePage();
+                this.setupLikeButton();
+                setTimeout(() => {
+                    this.setupScrollAnimations();
+                    // Check if we need to scroll to a specific section
+                    if (this.scrollToSection) {
+                        const targetId = this.scrollToSection;
+                        this.scrollToSection = null; // Clear it
+                        setTimeout(() => {
+                            const targetElement = document.getElementById(targetId);
+                            if (targetElement) {
+                                targetElement.scrollIntoView({
+                                    behavior: 'smooth',
+                                    block: 'start'
+                                });
+                            }
+                        }, 200);
+                    } else {
+                        // Scroll to top if no section to scroll to
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }
+                }, 100);
                 break;
             case 'login':
                 mainContent.innerHTML = this.renderLoginPage();
@@ -109,9 +244,12 @@ class SignSpeakApp {
                 break;
             case 'about':
                 mainContent.innerHTML = this.renderAboutPage();
+                setTimeout(() => this.setupScrollAnimations(), 100);
                 break;
             default:
                 mainContent.innerHTML = this.renderHomePage();
+                this.setupLikeButton();
+                setTimeout(() => this.setupScrollAnimations(), 100);
         }
         
         window.location.hash = page;
@@ -145,40 +283,123 @@ class SignSpeakApp {
 
     renderHomePage() {
         return `
-            <section class="hero">
-                <div class="hero-content">
-                    <h1>Real-time Sign Language to Text Converter</h1>
-                    <p>Breaking communication barriers between the hearing and deaf communities with cutting-edge AI technology.</p>
-                    <div class="hero-features">
-                        <div class="feature-item">
-                            <span class="checkmark">✓</span>
-                            <span>Real-time sign language recognition</span>
-                        </div>
-                        <div class="feature-item">
-                            <span class="checkmark">✓</span>
-                            <span>Accurate translation to text</span>
-                        </div>
-                        <div class="feature-item">
-                            <span class="checkmark">✓</span>
-                            <span>User-friendly interface</span>
-                        </div>
-                        <div class="feature-item">
-                            <span class="checkmark">✓</span>
-                            <span>Accessible for everyone</span>
-                        </div>
-                    </div>
+            <!-- Hero Section -->
+            <section class="landing-hero">
+                <div class="landing-hero-content">
+                    <h1>Bridge the Communication Gap</h1>
+                    <p>SignSpeak transforms sign language into text and speech in real-time, creating meaningful connections between deaf and hearing communities.</p>
                     <div class="hero-buttons">
-                        <a href="${this.isLoggedIn ? 'dashboard' : 'register'}" class="btn btn-primary">Get Started</a>
-                        <a href="about" class="btn btn-secondary">Learn More</a>
-                    </div>
-                </div>
-                <div class="hero-image">
-                    <div class="placeholder-image">
-                        Sign Language AI
+                        <a href="${this.isLoggedIn ? 'dashboard' : 'register'}" class="btn btn-primary">Start Translating</a>
+                        <a href="#features" class="btn btn-secondary">Learn More</a>
                     </div>
                 </div>
             </section>
+
+            <!-- Features Section -->
+            <section id="features" class="features-section">
+                <div class="container">
+                    <h2 style="text-align: center; margin-bottom: 3rem; color: var(--primary-color); font-size: 2.5rem;">Why Choose SignSpeak?</h2>
+                    <div class="features-grid">
+                        <div class="feature-card">
+                            <div class="feature-icon">👐</div>
+                            <h3>Real-time Translation</h3>
+                            <p>Instantly convert sign language gestures to text with our advanced AI technology. No delays, just seamless communication.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🌍</div>
+                            <h3>Multi-language Support</h3>
+                            <p>Translate signs to multiple languages including English, Tamil, and Hindi. Break language barriers effortlessly.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🔊</div>
+                            <h3>Voice Output</h3>
+                            <p>Hear the translated text with customizable voices and speech rates. Perfect for both personal and professional use.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">📱</div>
+                            <h3>Accessible Everywhere</h3>
+                            <p>Works perfectly on all devices - desktop, tablet, or mobile. Your communication assistant always within reach.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">📊</div>
+                            <h3>Learning Analytics</h3>
+                            <p>Track your progress with detailed history and analytics. Improve your signing skills over time.</p>
+                        </div>
+                        <div class="feature-card">
+                            <div class="feature-icon">🔒</div>
+                            <h3>Secure & Private</h3>
+                            <p>Your data stays private and secure. We believe in protecting your personal information and translation history.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Stats Section -->
+            <section class="stats-section">
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <h3>99%</h3>
+                        <p>Accuracy Rate</p>
+                    </div>
+                    <div class="stat-item">
+                        <h3>50+</h3>
+                        <p>Gestures Supported</p>
+                    </div>
+                    <div class="stat-item">
+                        <h3>3</h3>
+                        <p>Languages Available</p>
+                    </div>
+                    <div class="stat-item">
+                        <h3>24/7</h3>
+                        <p>Always Available</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Mission Section -->
+            <section class="mission-section">
+                <div class="mission-content">
+                    <h2>Our Mission</h2>
+                    <p>At SignSpeak, we believe that communication is a fundamental human right. Our mission is to create a world where deaf and hearing individuals can communicate freely and naturally, without barriers. Through innovative technology and a commitment to accessibility, we're building bridges that connect communities and transform lives.</p>
+                    <p>Every gesture matters, every connection counts. Join us in making communication accessible to all.</p>
+                </div>
+            </section>
+
+            <!-- CTA Section -->
+            <section class="cta-section">
+                <div class="cta-content">
+                    <h2>Ready to Start Communicating?</h2>
+                    <p>Join thousands of users who are already breaking down communication barriers with SignSpeak.</p>
+                    <div class="hero-buttons">
+                        <a href="${this.isLoggedIn ? 'dashboard' : 'register'}" class="btn btn-primary">Get Started Free</a>
+                        <a href="about" class="btn btn-secondary">See How It Works</a>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Like Button -->
+            <div class="like-container">
+                <button class="like-btn" id="likeBtn">
+                    <span class="heart-icon">❤️</span>
+                    <span>Like SignSpeak</span>
+                </button>
+            </div>
         `;
+    }
+
+    setupLikeButton() {
+        const likeBtn = document.getElementById('likeBtn');
+        if (likeBtn) {
+            likeBtn.addEventListener('click', () => {
+                likeBtn.classList.toggle('liked');
+                if (likeBtn.classList.contains('liked')) {
+                    likeBtn.innerHTML = '<span class="heart-icon">❤️</span><span>Liked!</span>';
+                    this.showMessage('Thank you for liking SignSpeak! ❤️', 'success');
+                } else {
+                    likeBtn.innerHTML = '<span class="heart-icon">❤️</span><span>Like SignSpeak</span>';
+                }
+            });
+        }
     }
 
     renderLoginPage() {
@@ -380,37 +601,93 @@ class SignSpeakApp {
 
     renderAboutPage() {
         return `
-            <div class="dashboard-container">
-                <div class="dashboard-header">
-                    <h2>About SignSpeak</h2>
-                    <p>Learn more about our mission and technology</p>
-                </div>
-                <div class="about-content">
-                    <p>SignSpeak is an innovative AI-powered platform that converts sign language to text in real-time, 
-                    breaking down communication barriers between the hearing and deaf communities.</p>
-                    
-                    <h3>Features</h3>
-                    <ul>
-                        <li>Real-time sign language recognition using TensorFlow.js</li>
-                        <li>Multi-language translation support (English, Tamil, Hindi)</li>
-                        <li>Text-to-speech functionality with customizable voices</li>
-                        <li>User history and analytics</li>
-                        <li>Mobile-responsive design</li>
-                        <li>Secure user authentication</li>
-                    </ul>
+            <div class="about-page">
+                <!-- Hero Section -->
+                <section class="about-hero">
+                    <div class="about-hero-content">
+                        <h1>About SignSpeak</h1>
+                        <p class="about-subtitle">Creating connections through technology</p>
+                    </div>
+                </section>
 
-                    <h3>Technology Stack</h3>
-                    <ul>
-                        <li>Frontend: HTML5, CSS3, JavaScript, TensorFlow.js</li>
-                        <li>Backend: Node.js, Express.js</li>
-                        <li>Database: MongoDB Atlas</li>
-                        <li>Deployment: Netlify</li>
-                    </ul>
+                <!-- Vision Section -->
+                <section class="about-section about-section-alt">
+                    <div class="about-container">
+                        <div class="about-content-grid">
+                            <div class="about-text">
+                                <h2>Our Vision</h2>
+                                <p>SignSpeak was born from a simple yet powerful vision: to eliminate communication barriers between deaf and hearing communities. We believe that everyone deserves the opportunity to communicate freely and express themselves without limitations.</p>
+                            </div>
+                            <div class="about-image">
+                                <img src="https://images.unsplash.com/photo-1581291518633-83b4ebd1d83e?w=600&h=400&fit=crop" alt="Communication and connection" class="about-img">
+                            </div>
+                        </div>
+                    </div>
+                </section>
 
-                    <h3>Our Mission</h3>
-                    <p>To create an inclusive world where communication barriers between hearing and deaf communities 
-                    are eliminated through cutting-edge technology.</p>
-                </div>
+                <!-- What We Do Section -->
+                <section class="about-section">
+                    <div class="about-container">
+                        <div class="about-content-grid about-content-grid-reverse">
+                            <div class="about-text">
+                                <h2>What We Do</h2>
+                                <p>Using cutting-edge artificial intelligence, SignSpeak converts sign language gestures into text and speech in real-time. Our platform is designed to be intuitive, accurate, and accessible to everyone, regardless of their technical background.</p>
+                                <ul class="feature-list">
+                                    <li>Real-time sign language translation</li>
+                                    <li>Multi-language text and speech output</li>
+                                    <li>Accessible across all devices</li>
+                                    <li>Advanced AI-powered gesture recognition</li>
+                                </ul>
+                            </div>
+                            <div class="about-image">
+                                <img src="https://images.unsplash.com/photo-1485827404703-89b55fcc595e?w=600&h=400&fit=crop" alt="AI Technology" class="about-img">
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Impact Section -->
+                <section class="about-section about-section-alt">
+                    <div class="about-container">
+                        <div class="about-content-grid">
+                            <div class="about-text">
+                                <h2>Our Impact</h2>
+                                <p>Since our launch, SignSpeak has helped thousands of users communicate more effectively. From educational institutions to workplaces and personal relationships, we're making a difference in people's lives every day.</p>
+                                <div class="impact-stats">
+                                    <div class="impact-stat">
+                                        <h3>1000+</h3>
+                                        <p>Active Users</p>
+                                    </div>
+                                    <div class="impact-stat">
+                                        <h3>50+</h3>
+                                        <p>Educational Institutions</p>
+                                    </div>
+                                    <div class="impact-stat">
+                                        <h3>99%</h3>
+                                        <p>Accuracy Rate</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="about-image">
+                                <img src="https://images.unsplash.com/photo-1521737604893-d14cc237f11d?w=600&h=400&fit=crop" alt="Community Impact" class="about-img">
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Community Section -->
+                <section class="about-section about-community">
+                    <div class="about-container">
+                        <div class="community-content">
+                            <h2>Join Our Community</h2>
+                            <p>We're more than just a technology platform - we're a community dedicated to inclusivity and accessibility. Join us in our mission to create a world where communication knows no barriers.</p>
+                            <div class="community-cta">
+                                <a href="${this.isLoggedIn ? 'dashboard' : 'register'}" class="btn btn-primary">Get Started Today</a>
+                                <a href="home" class="btn btn-secondary">Back to Home</a>
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </div>
         `;
     }
