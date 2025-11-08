@@ -504,6 +504,8 @@ class SignSpeakApp {
                                 <button id="startCamera" class="btn btn-primary">Start Camera</button>
                                 <button id="stopCamera" class="btn btn-secondary" disabled>Stop Camera</button>
                                 <button id="captureGesture" class="btn btn-accent" disabled>Capture Gesture</button>
+                                <button id="requestPermission" class="btn btn-ghost">Allow Camera</button>
+                                <div id="cameraHelper" class="camera-helper" style="margin-top:8px; font-size:0.9rem; color:var(--muted-color);">Click "Allow Camera" if your browser blocked permission, then click Start Camera.</div>
                             </div>
                         </div>
                         
@@ -718,33 +720,62 @@ class SignSpeakApp {
 
         try {
             this.showLoading('Logging in...');
-            const API_BASE_URL = window.location.hostname === 'localhost' 
+            
+            // Better API URL detection
+            const isLocalhost = window.location.hostname === 'localhost' || 
+                               window.location.hostname === '127.0.0.1' ||
+                               window.location.hostname === '';
+            const API_BASE_URL = isLocalhost 
                 ? 'http://localhost:3000/api' 
-                : '/.netlify/functions/api';
+                : '/api';
 
             const response = await fetch(`${API_BASE_URL}/login`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
                 body: JSON.stringify({ email, password })
             });
 
+            // Check if response is ok
+            if (!response.ok) {
+                let errorMessage = 'Login failed';
+                try {
+                    const errorData = await response.json();
+                    errorMessage = errorData.error || errorData.message || `Server error: ${response.status}`;
+                } catch (parseError) {
+                    errorMessage = `Server error: ${response.status} ${response.statusText}`;
+                }
+                this.hideLoading();
+                this.showMessage(errorMessage, 'error');
+                return;
+            }
+
             const data = await response.json();
             
-            if (data.success) {
+            if (data.success && data.token) {
                 localStorage.setItem('token', data.token);
                 localStorage.setItem('user', JSON.stringify(data.user));
                 this.currentUser = data.user;
                 this.isLoggedIn = true;
                 this.hideLoading();
                 this.showMessage('Login successful!', 'success');
-                setTimeout(() => this.navigateTo('dashboard'), 1000);
+                setTimeout(() => {
+                    this.updateNavigation();
+                    this.navigateTo('dashboard');
+                }, 1000);
             } else {
                 this.hideLoading();
-                this.showMessage(data.error || 'Login failed', 'error');
+                this.showMessage(data.error || data.message || 'Login failed. Please try again.', 'error');
             }
         } catch (error) {
             this.hideLoading();
-            this.showMessage('Network error. Please check your connection.', 'error');
+            console.error('Login error:', error);
+            const errorMessage = error.message.includes('fetch') 
+                ? 'Cannot connect to server. Please make sure the server is running on http://localhost:3000' 
+                : `Error: ${error.message}`;
+            this.showMessage(errorMessage, 'error');
         }
     }
 
@@ -771,29 +802,62 @@ class SignSpeakApp {
 
         try {
             this.showLoading('Creating your account...');
-            const API_BASE_URL = window.location.hostname === 'localhost' 
+            
+            // Better API URL detection
+            const isLocalhost = window.location.hostname === 'localhost' || 
+                               window.location.hostname === '127.0.0.1' ||
+                               window.location.hostname === '';
+            const API_BASE_URL = isLocalhost 
                 ? 'http://localhost:3000/api' 
-                : '/.netlify/functions/api';
+                : '/api';
+
+            // Prepare data for registration (remove confirmPassword and agreeTerms)
+            const registrationData = {
+                fullName: userData.fullName,
+                email: userData.email,
+                password: userData.password
+            };
 
             const response = await fetch(`${API_BASE_URL}/register`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(userData)
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(registrationData)
             });
+
+            // Check if response is ok
+            if (!response.ok) {
+                let errorMessage = 'Registration failed';
+                try {
+                    const errorData = await response.json();
+                    errorMessage = errorData.error || errorData.message || `Server error: ${response.status}`;
+                } catch (parseError) {
+                    errorMessage = `Server error: ${response.status} ${response.statusText}`;
+                }
+                this.hideLoading();
+                this.showMessage(errorMessage, 'error');
+                return;
+            }
 
             const data = await response.json();
             
             if (data.success) {
                 this.hideLoading();
-                this.showMessage('Registration successful! Please login.', 'success');
+                this.showMessage('Registration successful! Redirecting to login...', 'success');
                 setTimeout(() => this.navigateTo('login'), 2000);
             } else {
                 this.hideLoading();
-                this.showMessage(data.error || 'Registration failed', 'error');
+                this.showMessage(data.error || data.message || 'Registration failed. Please try again.', 'error');
             }
         } catch (error) {
             this.hideLoading();
-            this.showMessage('Registration failed. Please try again.', 'error');
+            console.error('Registration error:', error);
+            const errorMessage = error.message.includes('fetch') 
+                ? 'Cannot connect to server. Please make sure the server is running on http://localhost:3000' 
+                : `Error: ${error.message}`;
+            this.showMessage(errorMessage, 'error');
         }
     }
 
@@ -911,6 +975,10 @@ class SignSpeakApp {
         document.getElementById('startCamera').addEventListener('click', () => this.startCamera());
         document.getElementById('stopCamera').addEventListener('click', () => this.stopCamera());
         document.getElementById('captureGesture').addEventListener('click', () => this.captureGesture());
+        const reqBtn = document.getElementById('requestPermission');
+        if (reqBtn) {
+            reqBtn.addEventListener('click', () => this.requestCameraPermission());
+        }
         document.getElementById('speakText').addEventListener('click', () => this.speakText());
         document.getElementById('clearText').addEventListener('click', () => this.clearText());
 
@@ -966,7 +1034,47 @@ class SignSpeakApp {
             
         } catch (error) {
             console.error('Error accessing camera:', error);
-            this.showMessage(`Camera error: ${error.message}`, 'error');
+            // Provide clearer guidance for common permission errors
+            if (error && error.name === 'NotAllowedError') {
+                this.showMessage('Camera access was blocked. Please allow camera access in your browser settings and try again. If using Chrome, click the camera icon in the address bar and Allow.', 'error');
+            } else if (error && (error.name === 'NotFoundError' || error.name === 'OverconstrainedError')) {
+                this.showMessage('No suitable camera found. Please connect a camera and try again.', 'error');
+            } else if (error && error.name === 'SecurityError') {
+                this.showMessage('Camera access requires a secure context (HTTPS) or localhost. Please run this app on https or localhost.', 'error');
+            } else {
+                this.showMessage(`Camera error: ${error.message}`, 'error');
+            }
+        }
+    }
+
+    // Try to prompt for camera permission without starting persistent stream.
+    // This helps when the browser blocked permission previously; it gives the user a clear retry path.
+    async requestCameraPermission() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            this.showMessage('Camera API not supported in this browser', 'error');
+            return;
+        }
+
+        try {
+            // Request a short-lived stream to trigger the permission prompt
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            // Immediately stop tracks but this will have already prompted/allowed permission
+            stream.getTracks().forEach(t => t.stop());
+
+            // Enable start button so user can start full stream
+            const startBtn = document.getElementById('startCamera');
+            if (startBtn) startBtn.disabled = false;
+
+            this.showMessage('Camera permission granted. Click "Start Camera" to begin.', 'success');
+        } catch (err) {
+            console.error('Permission request error:', err);
+            if (err && err.name === 'NotAllowedError') {
+                this.showMessage('Camera permission was denied. Please enable it in your browser settings and click "Allow Camera" again.', 'error');
+            } else if (err && err.name === 'SecurityError') {
+                this.showMessage('Camera access requires HTTPS or localhost. Please run the site securely.', 'error');
+            } else {
+                this.showMessage(`Error requesting camera permission: ${err.message}`, 'error');
+            }
         }
     }
 
@@ -1105,9 +1213,10 @@ class SignSpeakApp {
 
     async saveToHistory(gesture, translatedText) {
         try {
-            const API_BASE_URL = window.location.hostname === 'localhost' 
-                ? 'http://localhost:3000/api' 
-                : '/.netlify/functions/api';
+            const isLocalhost = window.location.hostname === 'localhost' || 
+                               window.location.hostname === '127.0.0.1' ||
+                               window.location.hostname === '';
+            const API_BASE_URL = isLocalhost ? 'http://localhost:3000/api' : '/api';
 
             const outputLanguage = document.getElementById('outputLanguage').value;
             
@@ -1132,9 +1241,10 @@ class SignSpeakApp {
 
     async loadUserHistory() {
         try {
-            const API_BASE_URL = window.location.hostname === 'localhost' 
-                ? 'http://localhost:3000/api' 
-                : '/.netlify/functions/api';
+            const isLocalhost = window.location.hostname === 'localhost' || 
+                               window.location.hostname === '127.0.0.1' ||
+                               window.location.hostname === '';
+            const API_BASE_URL = isLocalhost ? 'http://localhost:3000/api' : '/api';
 
             const response = await fetch(`${API_BASE_URL}/history/${this.currentUser.id}`, {
                 headers: {
@@ -1230,33 +1340,66 @@ class SignSpeakApp {
 class GestureDetector {
     constructor() {
         this.lastGestureTime = 0;
-        this.gestureCooldown = 2000; // 2 seconds between gestures
+        this.gestureCooldown = 1500; // 1.5 seconds between gestures
         this.currentGesture = null;
+        this.gestureHistory = [];
+        this.stableGestureCount = 0;
+        this.lastDetectedGesture = null;
     }
 
     detectGesture(landmarks) {
-        const now = Date.now();
-        if (now - this.lastGestureTime < this.gestureCooldown) {
+        if (!landmarks || landmarks.length < 21) {
             return null;
         }
 
         // Extract hand features
         const features = this.extractFeatures(landmarks);
         
-        // Detect alphabet letters
-        const letter = this.detectAlphabet(features);
+        // Detect alphabet letters first (most specific)
+        const letter = this.detectAlphabet(features, landmarks);
         if (letter) {
-            this.lastGestureTime = now;
-            return letter;
+            // Require gesture to be stable for 3 frames
+            if (letter === this.lastDetectedGesture) {
+                this.stableGestureCount++;
+                if (this.stableGestureCount >= 3) {
+                    const now = Date.now();
+                    if (now - this.lastGestureTime >= this.gestureCooldown) {
+                        this.lastGestureTime = now;
+                        this.stableGestureCount = 0;
+                        this.lastDetectedGesture = null;
+                        return letter;
+                    }
+                }
+            } else {
+                this.lastDetectedGesture = letter;
+                this.stableGestureCount = 1;
+            }
+            return null;
         }
 
-        // Detect common words
-        const word = this.detectWords(features);
+        // Detect common words/phrases
+        const word = this.detectWords(features, landmarks);
         if (word) {
-            this.lastGestureTime = now;
-            return word;
+            if (word === this.lastDetectedGesture) {
+                this.stableGestureCount++;
+                if (this.stableGestureCount >= 5) { // Words need more stability
+                    const now = Date.now();
+                    if (now - this.lastGestureTime >= this.gestureCooldown) {
+                        this.lastGestureTime = now;
+                        this.stableGestureCount = 0;
+                        return word;
+                    }
+                }
+            } else {
+                this.lastDetectedGesture = word;
+                this.stableGestureCount = 1;
+            }
+            return null;
         }
 
+        // Reset if no gesture detected
+        this.lastDetectedGesture = null;
+        this.stableGestureCount = 0;
         return null;
     }
 
@@ -1272,36 +1415,90 @@ class GestureDetector {
 
     getFingerStates(landmarks) {
         const fingerTips = [8, 12, 16, 20]; // Index, Middle, Ring, Pinky
-        const fingerPips = [6, 10, 14, 18]; // PIP joints
+        const fingerMCPs = [5, 9, 13, 17]; // MCP joints (base of fingers)
         const states = [];
+
+        // Get hand bounding box for normalization
+        const wrist = landmarks[0];
+        const handWidth = this.getHandWidth(landmarks);
 
         // Check four fingers (index, middle, ring, pinky)
         for (let i = 0; i < 4; i++) {
             const tip = landmarks[fingerTips[i]];
-            const pip = landmarks[fingerPips[i]];
+            const mcp = landmarks[fingerMCPs[i]];
             
-            if (tip && pip) {
-                const extended = tip[1] < pip[1]; // Y coordinate comparison
+            if (tip && mcp) {
+                // Check if finger is extended (tip is significantly above MCP)
+                // Also check distance from wrist
+                const tipToMcp = Math.abs(tip[1] - mcp[1]);
+                const tipToWrist = Math.sqrt(
+                    Math.pow(tip[0] - wrist[0], 2) + 
+                    Math.pow(tip[1] - wrist[1], 2)
+                );
+                const mcpToWrist = Math.sqrt(
+                    Math.pow(mcp[0] - wrist[0], 2) + 
+                    Math.pow(mcp[1] - wrist[1], 2)
+                );
+                
+                // Finger is extended if tip is further from wrist than MCP
+                // and tip is above MCP (for upright hand)
+                const extended = (tipToWrist > mcpToWrist * 1.2) && (tip[1] < mcp[1]);
                 states.push(extended ? 1 : 0);
+            } else {
+                states.push(0);
             }
         }
 
-        // Thumb (special handling)
+        // Thumb (special handling - different axis)
         const thumbState = this.getThumbState(landmarks);
         states.push(thumbState);
 
         return states;
     }
 
+    getHandWidth(landmarks) {
+        const indexMcp = landmarks[5];
+        const pinkyMcp = landmarks[17];
+        if (indexMcp && pinkyMcp) {
+            return Math.sqrt(
+                Math.pow(indexMcp[0] - pinkyMcp[0], 2) + 
+                Math.pow(indexMcp[1] - pinkyMcp[1], 2)
+            );
+        }
+        return 100; // Default width
+    }
+
     getThumbState(landmarks) {
         const thumbTip = landmarks[4];
         const thumbIp = landmarks[3];
         const thumbMcp = landmarks[2];
+        const wrist = landmarks[0];
         
-        if (!thumbTip || !thumbIp || !thumbMcp) return 0;
+        if (!thumbTip || !thumbIp || !thumbMcp || !wrist) return 0;
 
-        // Check if thumb is extended
-        const thumbExtended = thumbTip[0] > thumbIp[0]; // X coordinate comparison
+        // Calculate distances
+        const tipToIp = Math.sqrt(
+            Math.pow(thumbTip[0] - thumbIp[0], 2) + 
+            Math.pow(thumbTip[1] - thumbIp[1], 2)
+        );
+        const ipToMcp = Math.sqrt(
+            Math.pow(thumbIp[0] - thumbMcp[0], 2) + 
+            Math.pow(thumbIp[1] - thumbMcp[1], 2)
+        );
+        const tipToWrist = Math.sqrt(
+            Math.pow(thumbTip[0] - wrist[0], 2) + 
+            Math.pow(thumbTip[1] - wrist[1], 2)
+        );
+        const mcpToWrist = Math.sqrt(
+            Math.pow(thumbMcp[0] - wrist[0], 2) + 
+            Math.pow(thumbMcp[1] - wrist[1], 2)
+        );
+
+        // Thumb is extended if tip is significantly away from wrist
+        // For right hand: thumb extended means thumbTip[0] > thumbMcp[0]
+        // Check both distance and position
+        const thumbExtended = (tipToWrist > mcpToWrist * 1.3) && 
+                             (Math.abs(thumbTip[0] - thumbMcp[0]) > 20);
         
         return thumbExtended ? 1 : 0;
     }
@@ -1309,6 +1506,7 @@ class GestureDetector {
     getThumbPosition(landmarks) {
         const thumbTip = landmarks[4];
         const indexTip = landmarks[8];
+        const indexMcp = landmarks[5];
         const palmBase = landmarks[0];
         
         if (!thumbTip || !indexTip || !palmBase) return 'unknown';
@@ -1323,8 +1521,11 @@ class GestureDetector {
             Math.pow(thumbTip[1] - palmBase[1], 2)
         );
 
-        if (thumbToIndex < 30) return 'touch';
-        if (thumbToPalm > 100) return 'out';
+        const handWidth = this.getHandWidth(landmarks);
+        const threshold = handWidth * 0.3; // Adaptive threshold
+
+        if (thumbToIndex < threshold) return 'touch';
+        if (thumbToPalm > handWidth * 0.8) return 'out';
         return 'in';
     }
 
@@ -1375,63 +1576,195 @@ class GestureDetector {
         return extendedFingers >= 3;
     }
 
-    detectAlphabet(features) {
+    detectAlphabet(features, landmarks) {
         const { fingerStates, thumbPosition, handOrientation, fingerSpread } = features;
 
-        // Convert finger states to simple array
+        // Convert finger states to simple array [Index, Middle, Ring, Pinky, Thumb]
         const fingers = fingerStates.map(state => state > 0.5 ? 1 : 0);
+        const extendedCount = fingers.slice(0, 4).filter(f => f === 1).length;
 
-        // A: All fingers closed, thumb aside
-        if (fingers.every(f => f === 0) && thumbPosition === 'out') return 'A';
+        // A: Fist with thumb out to the side
+        if (fingers[0] === 0 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && fingers[4] === 1 && thumbPosition === 'out') {
+            return 'A';
+        }
 
-        // B: All fingers extended
-        if (fingers.slice(0, 4).every(f => f === 1) && fingers[4] === 0) return 'B';
+        // B: All four fingers extended, thumb in
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers[2] === 1 && fingers[3] === 1 && fingers[4] === 0) {
+            return 'B';
+        }
 
-        // C: Curved fingers (partial extension)
-        if (fingers.every(f => f === 0.5)) return 'C';
+        // C: Curved hand (all fingers partially extended)
+        if (extendedCount >= 2 && fingerSpread < 30 && handOrientation === 'right') {
+            return 'C';
+        }
 
-        // D: Only index finger extended
-        if (fingers[0] === 1 && fingers.slice(1, 4).every(f => f === 0)) return 'D';
+        // D: Only index finger extended, thumb in
+        if (fingers[0] === 1 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && fingers[4] === 0) {
+            return 'D';
+        }
 
-        // F: OK sign (thumb and index touching)
-        if (fingers[0] === 1 && fingers[1] === 1 && fingers.slice(2).every(f => f === 0) && thumbPosition === 'touch') return 'F';
+        // E: All fingers bent, thumb touching tips
+        if (fingers[0] === 0 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && thumbPosition === 'touch') {
+            return 'E';
+        }
 
-        // I: Pinky extended
-        if (fingers[3] === 1 && fingers.slice(0, 3).every(f => f === 0)) return 'I';
+        // F: OK sign - thumb and index form circle, other fingers extended
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers[2] === 1 && fingers[3] === 1 && thumbPosition === 'touch') {
+            return 'F';
+        }
 
-        // L: Index and thumb extended
-        if (fingers[0] === 1 && fingers[4] === 1 && fingers.slice(1, 4).every(f => f === 0)) return 'L';
+        // G: Index finger pointing (like gun), thumb out
+        if (fingers[0] === 1 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && fingers[4] === 1 && thumbPosition === 'out') {
+            return 'G';
+        }
 
-        // V: Peace sign (index and middle extended)
-        if (fingers[0] === 1 && fingers[1] === 1 && fingers.slice(2).every(f => f === 0) && fingerSpread > 50) return 'V';
+        // H: Index and middle extended together, others closed
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers[2] === 0 && fingers[3] === 0 && fingerSpread < 20) {
+            return 'H';
+        }
 
-        // W: Three fingers (index, middle, ring)
-        if (fingers[0] === 1 && fingers[1] === 1 && fingers[2] === 1 && fingers.slice(3).every(f => f === 0)) return 'W';
+        // I: Only pinky extended
+        if (fingers[0] === 0 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 1 && fingers[4] === 0) {
+            return 'I';
+        }
 
-        // Y: Thumb and pinky out
-        if (fingers[3] === 1 && fingers[4] === 1 && fingers.slice(0, 3).every(f => f === 0)) return 'Y';
+        // K: Index and middle extended in V, thumb between them
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers[2] === 0 && fingers[3] === 0 && fingers[4] === 1 && fingerSpread > 30) {
+            return 'K';
+        }
+
+        // L: Index and thumb extended at right angle
+        if (fingers[0] === 1 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && fingers[4] === 1 && thumbPosition === 'out') {
+            return 'L';
+        }
+
+        // M: Three fingers (thumb, index, middle) down, ring and pinky up
+        if (fingers[0] === 0 && fingers[1] === 0 && fingers[2] === 1 && fingers[3] === 1 && fingers[4] === 0) {
+            return 'M';
+        }
+
+        // N: Two fingers (ring and pinky) down, others up
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers[2] === 1 && fingers[3] === 0 && fingers[4] === 0) {
+            return 'N';
+        }
+
+        // O: All fingers curved to form O shape
+        if (extendedCount === 0 && fingerSpread < 20 && thumbPosition === 'touch') {
+            return 'O';
+        }
+
+        // P: Thumb and index extended, others closed
+        if (fingers[0] === 1 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && fingers[4] === 1 && thumbPosition === 'out') {
+            return 'P';
+        }
+
+        // Q: Thumb and index extended downward
+        if (fingers[0] === 1 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && fingers[4] === 1 && handOrientation === 'down') {
+            return 'Q';
+        }
+
+        // R: Index and middle crossed
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers[2] === 0 && fingers[3] === 0 && fingerSpread < 15) {
+            return 'R';
+        }
+
+        // S: Fist (all fingers closed, thumb across palm)
+        if (fingers[0] === 0 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && fingers[4] === 0) {
+            return 'S';
+        }
+
+        // T: Thumb between index and middle
+        if (fingers[0] === 0 && fingers[1] === 0 && fingers[2] === 1 && fingers[3] === 1 && fingers[4] === 1) {
+            return 'T';
+        }
+
+        // U: Index and middle extended together
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers[2] === 0 && fingers[3] === 0 && fingerSpread < 25) {
+            return 'U';
+        }
+
+        // V: Peace sign (index and middle extended apart)
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers[2] === 0 && fingers[3] === 0 && fingerSpread > 40) {
+            return 'V';
+        }
+
+        // W: Three fingers extended (index, middle, ring)
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers[2] === 1 && fingers[3] === 0) {
+            return 'W';
+        }
+
+        // X: Index finger bent
+        if (fingers[0] === 0 && fingers[1] === 1 && fingers[2] === 1 && fingers[3] === 1) {
+            return 'X';
+        }
+
+        // Y: Thumb and pinky extended
+        if (fingers[0] === 0 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 1 && fingers[4] === 1) {
+            return 'Y';
+        }
+
+        // Z: Index finger drawing Z shape (hard to detect statically, use movement)
+        if (fingers[0] === 1 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && handOrientation === 'right') {
+            return 'Z';
+        }
 
         return null;
     }
 
-    detectWords(features) {
-        const { fingerStates, thumbPosition, handOrientation, palmOpen } = features;
+    detectWords(features, landmarks) {
+        const { fingerStates, thumbPosition, handOrientation, palmOpen, fingerSpread } = features;
         const fingers = fingerStates.map(state => state > 0.5 ? 1 : 0);
+        const extendedCount = fingers.slice(0, 4).filter(f => f === 1).length;
 
-        // HELLO: Open hand wave (all fingers extended)
-        if (palmOpen && fingers.slice(0, 4).every(f => f === 1)) return 'HELLO';
+        // HELLO: Open hand with all fingers extended, waving motion
+        if (palmOpen && extendedCount === 4 && fingers[4] === 0) {
+            return 'HELLO';
+        }
 
-        // THANK YOU: Open hand moving from mouth
-        if (palmOpen && handOrientation === 'up') return 'THANK YOU';
+        // THANK YOU: Open hand moving forward from chin
+        if (palmOpen && extendedCount >= 3 && handOrientation === 'up') {
+            return 'THANK YOU';
+        }
 
-        // YES: Closed fist nod
-        if (fingers.every(f => f === 0)) return 'YES';
+        // YES: Fist with thumb up (nodding motion)
+        if (fingers[0] === 0 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && fingers[4] === 1 && thumbPosition === 'out') {
+            return 'YES';
+        }
 
-        // NO: Index finger shake
-        if (fingers[0] === 1 && fingers.slice(1).every(f => f === 0)) return 'NO';
+        // NO: Index and middle finger crossed (X shape) or index finger shaking
+        if (fingers[0] === 1 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0) {
+            return 'NO';
+        }
 
-        // I LOVE YOU: Thumb, index, and pinky extended
-        if (fingers[0] === 1 && fingers[3] === 1 && fingers[4] === 1 && fingers[1] === 0 && fingers[2] === 0) return 'I LOVE YOU';
+        // PLEASE: Open hand rubbing chest in circular motion
+        if (palmOpen && extendedCount >= 3 && handOrientation === 'right') {
+            return 'PLEASE';
+        }
+
+        // SORRY: Fist making circular motion on chest
+        if (fingers[0] === 0 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && fingers[4] === 0) {
+            return 'SORRY';
+        }
+
+        // I LOVE YOU: Thumb, index, and pinky extended (ILU sign)
+        if (fingers[0] === 1 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 1 && fingers[4] === 1) {
+            return 'I LOVE YOU';
+        }
+
+        // HELP: Thumb up, other hand patting
+        if (fingers[0] === 0 && fingers[1] === 0 && fingers[2] === 0 && fingers[3] === 0 && fingers[4] === 1 && thumbPosition === 'out') {
+            return 'HELP';
+        }
+
+        // GOOD: Thumb up
+        if (fingers[4] === 1 && thumbPosition === 'out' && extendedCount === 0) {
+            return 'GOOD';
+        }
+
+        // BAD: Thumb down
+        if (fingers[4] === 1 && thumbPosition === 'out' && handOrientation === 'down') {
+            return 'BAD';
+        }
 
         return null;
     }
