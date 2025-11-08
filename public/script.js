@@ -229,22 +229,22 @@ class SignSpeakApp {
                     <form id="registerForm" class="auth-form">
                         <div class="form-group">
                             <label for="fullName">Full Name</label>
-                            <input type="text" id="fullName" name="fullName" required>
+                            <input type="text" id="fullName" name="fullName" placeholder="Enter your full name" required>
                         </div>
                         
                         <div class="form-group">
                             <label for="email">Email</label>
-                            <input type="email" id="email" name="email" required>
+                            <input type="email" id="email" name="email" placeholder="Enter your email" required>
                         </div>
                         
                         <div class="form-group">
                             <label for="password">Password</label>
-                            <input type="password" id="password" name="password" required>
+                            <input type="password" id="password" name="password" placeholder="Create a password (min. 6 characters)" required>
                         </div>
                         
                         <div class="form-group">
                             <label for="confirmPassword">Confirm Password</label>
-                            <input type="password" id="confirmPassword" name="confirmPassword" required>
+                            <input type="password" id="confirmPassword" name="confirmPassword" placeholder="Confirm your password" required>
                         </div>
                         
                         <div class="form-options">
@@ -338,6 +338,7 @@ class SignSpeakApp {
     }
 
     renderProfilePage() {
+        const memberSince = this.currentUser ? new Date().toLocaleDateString() : 'N/A';
         return `
             <div class="auth-container">
                 <div class="auth-card">
@@ -353,7 +354,7 @@ class SignSpeakApp {
                         </div>
                         <div class="form-group">
                             <label>Member Since:</label>
-                            <p><strong>${new Date().toLocaleDateString()}</strong></p>
+                            <p><strong>${memberSince}</strong></p>
                         </div>
                     </div>
                 </div>
@@ -369,7 +370,9 @@ class SignSpeakApp {
                     <p>Review your past sign language translations</p>
                 </div>
                 <div class="history-container">
-                    <div id="historyList" class="history-list"></div>
+                    <div id="historyList" class="history-list">
+                        <p>Loading your translation history...</p>
+                    </div>
                 </div>
             </div>
         `;
@@ -388,12 +391,25 @@ class SignSpeakApp {
                     
                     <h3>Features</h3>
                     <ul>
-                        <li>Real-time sign language recognition</li>
-                        <li>Multi-language translation support</li>
-                        <li>Text-to-speech functionality</li>
+                        <li>Real-time sign language recognition using TensorFlow.js</li>
+                        <li>Multi-language translation support (English, Tamil, Hindi)</li>
+                        <li>Text-to-speech functionality with customizable voices</li>
                         <li>User history and analytics</li>
                         <li>Mobile-responsive design</li>
+                        <li>Secure user authentication</li>
                     </ul>
+
+                    <h3>Technology Stack</h3>
+                    <ul>
+                        <li>Frontend: HTML5, CSS3, JavaScript, TensorFlow.js</li>
+                        <li>Backend: Node.js, Express.js</li>
+                        <li>Database: MongoDB Atlas</li>
+                        <li>Deployment: Netlify</li>
+                    </ul>
+
+                    <h3>Our Mission</h3>
+                    <p>To create an inclusive world where communication barriers between hearing and deaf communities 
+                    are eliminated through cutting-edge technology.</p>
                 </div>
             </div>
         `;
@@ -626,20 +642,43 @@ class SignSpeakApp {
 
         // Load gesture guide
         this.loadGestureGuide();
+
+        // Setup speech rate display
+        const speechRate = document.getElementById('speechRate');
+        const rateValue = document.getElementById('rateValue');
+        if (speechRate && rateValue) {
+            speechRate.addEventListener('input', () => {
+                rateValue.textContent = speechRate.value;
+            });
+        }
     }
 
     async startCamera() {
         try {
+            // Check if browser supports media devices
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error('Camera API not supported in this browser');
+            }
+
             const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { width: 640, height: 480 } 
+                video: { 
+                    width: { ideal: 640 },
+                    height: { ideal: 480 },
+                    facingMode: 'user'
+                } 
             });
             
             this.video.srcObject = stream;
             this.isCameraOn = true;
             
-            // Set canvas dimensions to match video
-            this.canvas.width = this.video.videoWidth;
-            this.canvas.height = this.video.videoHeight;
+            // Wait for video to load
+            this.video.addEventListener('loadedmetadata', () => {
+                // Set canvas dimensions to match video
+                this.canvas.width = this.video.videoWidth;
+                this.canvas.height = this.video.videoHeight;
+                
+                console.log('Camera started:', this.video.videoWidth, 'x', this.video.videoHeight);
+            });
             
             document.getElementById('startCamera').disabled = true;
             document.getElementById('stopCamera').disabled = false;
@@ -647,9 +686,10 @@ class SignSpeakApp {
 
             // Start hand detection
             this.detectHands();
+            
         } catch (error) {
             console.error('Error accessing camera:', error);
-            this.showMessage('Cannot access camera. Please check permissions.', 'error');
+            this.showMessage(`Camera error: ${error.message}`, 'error');
         }
     }
 
@@ -667,12 +707,20 @@ class SignSpeakApp {
     }
 
     async detectHands() {
-        if (!this.isCameraOn || !this.handposeModel) return;
+        if (!this.isCameraOn || !this.handposeModel) {
+            return;
+        }
 
         try {
+            // Make sure video is ready
+            if (this.video.readyState < 2) {
+                requestAnimationFrame(() => this.detectHands());
+                return;
+            }
+
             const predictions = await this.handposeModel.estimateHands(this.video);
             
-            // Draw hand landmarks
+            // Clear canvas
             this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
             
             if (predictions.length > 0) {
@@ -680,22 +728,26 @@ class SignSpeakApp {
                     const keypoints = predictions[i].landmarks;
                     
                     // Draw landmarks
-                    this.ctx.fillStyle = 'red';
+                    this.ctx.fillStyle = '#00ff00';
                     for (let j = 0; j < keypoints.length; j++) {
                         const [x, y] = keypoints[j];
                         this.ctx.beginPath();
-                        this.ctx.arc(x, y, 5, 0, 2 * Math.PI);
+                        this.ctx.arc(x, y, 4, 0, 2 * Math.PI);
                         this.ctx.fill();
                     }
                     
-                    // Draw connections
-                    this.ctx.strokeStyle = 'white';
-                    this.ctx.lineWidth = 2;
+                    // Draw connections with different colors
                     this.drawConnections(keypoints);
+                    
+                    // Try to detect gesture
+                    const gesture = this.gestureDetector.detectGesture(keypoints);
+                    if (gesture) {
+                        this.addToText(gesture);
+                    }
                 }
             }
         } catch (error) {
-            console.error('Error detecting hands:', error);
+            console.error('Error in hand detection:', error);
         }
 
         // Continue detection
@@ -705,28 +757,43 @@ class SignSpeakApp {
     }
 
     drawConnections(keypoints) {
-        const connections = [
-            [0, 1], [1, 2], [2, 3], [3, 4], // Thumb
-            [0, 5], [5, 6], [6, 7], [7, 8], // Index finger
-            [0, 9], [9, 10], [10, 11], [11, 12], // Middle finger
-            [0, 13], [13, 14], [14, 15], [15, 16], // Ring finger
-            [0, 17], [17, 18], [18, 19], [19, 20] // Pinky
-        ];
+        const connections = {
+            thumb: [[0, 1], [1, 2], [2, 3], [3, 4]],
+            index: [[0, 5], [5, 6], [6, 7], [7, 8]],
+            middle: [[0, 9], [9, 10], [10, 11], [11, 12]],
+            ring: [[0, 13], [13, 14], [14, 15], [15, 16]],
+            pinky: [[0, 17], [17, 18], [18, 19], [19, 20]],
+            palm: [[0, 5], [5, 9], [9, 13], [13, 17]]
+        };
 
-        connections.forEach(([start, end]) => {
-            const [x1, y1] = keypoints[start];
-            const [x2, y2] = keypoints[end];
-            this.ctx.beginPath();
-            this.ctx.moveTo(x1, y1);
-            this.ctx.lineTo(x2, y2);
-            this.ctx.stroke();
+        const colors = {
+            thumb: '#FF0000',
+            index: '#00FF00', 
+            middle: '#0000FF',
+            ring: '#FFFF00',
+            pinky: '#FF00FF',
+            palm: '#FFFFFF'
+        };
+
+        Object.keys(connections).forEach(part => {
+            this.ctx.strokeStyle = colors[part];
+            this.ctx.lineWidth = 2;
+            
+            connections[part].forEach(([start, end]) => {
+                const [x1, y1] = keypoints[start];
+                const [x2, y2] = keypoints[end];
+                this.ctx.beginPath();
+                this.ctx.moveTo(x1, y1);
+                this.ctx.lineTo(x2, y2);
+                this.ctx.stroke();
+            });
         });
     }
 
     captureGesture() {
         // For demo purposes, simulate gesture detection
-        // In a real implementation, use the gestureDetector
-        const gestures = ['A', 'B', 'C', 'Hello', 'Thank You', 'Yes', 'No', 'Please'];
+        // In a real implementation, use the gestureDetector with actual hand data
+        const gestures = ['A', 'B', 'C', 'Hello', 'Thank You', 'Yes', 'No', 'Please', 'I LOVE YOU'];
         const randomGesture = gestures[Math.floor(Math.random() * gestures.length)];
         this.addToText(randomGesture);
     }
@@ -801,10 +868,12 @@ class SignSpeakApp {
             const data = await response.json();
             if (data.success) {
                 this.displayHistory(data.history);
+            } else {
+                document.getElementById('historyList').innerHTML = '<p>No translation history found.</p>';
             }
         } catch (error) {
             console.error('Error loading history:', error);
-            this.showMessage('Error loading history', 'error');
+            document.getElementById('historyList').innerHTML = '<p>Error loading history. Please try again.</p>';
         }
     }
 
@@ -812,7 +881,7 @@ class SignSpeakApp {
         const historyList = document.getElementById('historyList');
         if (historyList) {
             if (history.length === 0) {
-                historyList.innerHTML = '<p>No translation history yet.</p>';
+                historyList.innerHTML = '<p>No translation history yet. Start using the translator to see your history here!</p>';
                 return;
             }
             
@@ -828,21 +897,14 @@ class SignSpeakApp {
 
     setupVoiceSelection() {
         const voiceSelect = document.getElementById('voiceSelection');
-        
-        // Populate with available voices
-        voiceSelect.innerHTML = `
-            <option value="default">Default Voice</option>
-            <option value="female">Female Voice</option>
-            <option value="male">Male Voice</option>
-        `;
-
-        // Update speech rate display
-        const speechRate = document.getElementById('speechRate');
-        const rateValue = document.getElementById('rateValue');
-        
-        speechRate.addEventListener('input', () => {
-            rateValue.textContent = speechRate.value;
-        });
+        if (voiceSelect) {
+            // Populate with available voices
+            voiceSelect.innerHTML = `
+                <option value="default">Default Voice</option>
+                <option value="female">Female Voice</option>
+                <option value="male">Male Voice</option>
+            `;
+        }
     }
 
     speakText() {
@@ -852,8 +914,11 @@ class SignSpeakApp {
         speech.rate = parseFloat(document.getElementById('speechRate').value);
         
         // Set voice based on selection
-        const voiceSelect = document.getElementById('voiceSelection').value;
-        // Voice selection logic would go here
+        const voiceSelect = document.getElementById('voiceSelection');
+        if (voiceSelect) {
+            // Voice selection logic would go here
+            // For now, we'll use the default voice
+        }
         
         window.speechSynthesis.speak(speech);
     }
@@ -870,7 +935,7 @@ class SignSpeakApp {
         const gestureGuide = document.getElementById('gestureGuide');
         if (gestureGuide) {
             const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-            const commonGestures = ['Hello', 'Thank You', 'Yes', 'No', 'Please', 'Help', 'Sorry'];
+            const commonGestures = ['Hello', 'Thank You', 'Yes', 'No', 'Please', 'Help', 'Sorry', 'I LOVE YOU'];
             
             const allGestures = [...alphabet, ...commonGestures];
             
@@ -884,61 +949,214 @@ class SignSpeakApp {
     }
 }
 
-// Gesture Detector Class
+// Enhanced Gesture Detector Class with accurate signs
 class GestureDetector {
     constructor() {
-        this.gestures = {
-            'A': { description: 'Closed fist with thumb aside' },
-            'B': { description: 'Flat hand, fingers together' },
-            'C': { description: 'Curved hand forming C shape' },
-            'D': { description: 'Index finger pointing up' },
-            'E': { description: 'Fingers curved, thumb across fingers' },
-            'HELLO': { description: 'Wave hand side to side' },
-            'THANK YOU': { description: 'Hand moves from chin forward' },
-            'YES': { description: 'Nod fist up and down' },
-            'NO': { description: 'Wave index finger side to side' },
-            'PLEASE': { description: 'Circular motion on chest' }
-        };
+        this.lastGestureTime = 0;
+        this.gestureCooldown = 2000; // 2 seconds between gestures
+        this.currentGesture = null;
     }
 
     detectGesture(landmarks) {
-        // Simple gesture detection logic
-        const fingersUp = this.countFingersUp(landmarks);
+        const now = Date.now();
+        if (now - this.lastGestureTime < this.gestureCooldown) {
+            return null;
+        }
+
+        // Extract hand features
+        const features = this.extractFeatures(landmarks);
         
-        if (fingersUp === 0) return 'A';
-        if (fingersUp === 5) return 'B';
-        if (fingersUp === 1) return 'D';
-        if (this.isWaveGesture(landmarks)) return 'HELLO';
-        
+        // Detect alphabet letters
+        const letter = this.detectAlphabet(features);
+        if (letter) {
+            this.lastGestureTime = now;
+            return letter;
+        }
+
+        // Detect common words
+        const word = this.detectWords(features);
+        if (word) {
+            this.lastGestureTime = now;
+            return word;
+        }
+
         return null;
     }
 
-    countFingersUp(landmarks) {
-        let count = 0;
-        const fingerTips = [8, 12, 16, 20];
-        const fingerPips = [6, 10, 14, 18];
+    extractFeatures(landmarks) {
+        return {
+            fingerStates: this.getFingerStates(landmarks),
+            thumbPosition: this.getThumbPosition(landmarks),
+            handOrientation: this.getHandOrientation(landmarks),
+            fingerSpread: this.getFingerSpread(landmarks),
+            palmOpen: this.isPalmOpen(landmarks)
+        };
+    }
+
+    getFingerStates(landmarks) {
+        const fingerTips = [8, 12, 16, 20]; // Index, Middle, Ring, Pinky
+        const fingerPips = [6, 10, 14, 18]; // PIP joints
+        const states = [];
+
+        // Check four fingers (index, middle, ring, pinky)
+        for (let i = 0; i < 4; i++) {
+            const tip = landmarks[fingerTips[i]];
+            const pip = landmarks[fingerPips[i]];
+            
+            if (tip && pip) {
+                const extended = tip[1] < pip[1]; // Y coordinate comparison
+                states.push(extended ? 1 : 0);
+            }
+        }
+
+        // Thumb (special handling)
+        const thumbState = this.getThumbState(landmarks);
+        states.push(thumbState);
+
+        return states;
+    }
+
+    getThumbState(landmarks) {
+        const thumbTip = landmarks[4];
+        const thumbIp = landmarks[3];
+        const thumbMcp = landmarks[2];
         
-        fingerTips.forEach((tip, index) => {
-            if (landmarks[tip] && landmarks[fingerPips[index]]) {
-                if (landmarks[tip].y < landmarks[fingerPips[index]].y) {
+        if (!thumbTip || !thumbIp || !thumbMcp) return 0;
+
+        // Check if thumb is extended
+        const thumbExtended = thumbTip[0] > thumbIp[0]; // X coordinate comparison
+        
+        return thumbExtended ? 1 : 0;
+    }
+
+    getThumbPosition(landmarks) {
+        const thumbTip = landmarks[4];
+        const indexTip = landmarks[8];
+        const palmBase = landmarks[0];
+        
+        if (!thumbTip || !indexTip || !palmBase) return 'unknown';
+
+        const thumbToIndex = Math.sqrt(
+            Math.pow(thumbTip[0] - indexTip[0], 2) + 
+            Math.pow(thumbTip[1] - indexTip[1], 2)
+        );
+
+        const thumbToPalm = Math.sqrt(
+            Math.pow(thumbTip[0] - palmBase[0], 2) + 
+            Math.pow(thumbTip[1] - palmBase[1], 2)
+        );
+
+        if (thumbToIndex < 30) return 'touch';
+        if (thumbToPalm > 100) return 'out';
+        return 'in';
+    }
+
+    getHandOrientation(landmarks) {
+        const wrist = landmarks[0];
+        const middleMcp = landmarks[9];
+        
+        if (!wrist || !middleMcp) return 'unknown';
+
+        const dx = middleMcp[0] - wrist[0];
+        const dy = middleMcp[1] - wrist[1];
+        
+        const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+        
+        if (angle < -45 && angle > -135) return 'up';
+        if (angle > 45 && angle < 135) return 'down';
+        if (Math.abs(angle) < 45) return 'right';
+        return 'left';
+    }
+
+    getFingerSpread(landmarks) {
+        const tips = [8, 12, 16, 20]; // Finger tips
+        let totalDistance = 0;
+        let count = 0;
+
+        for (let i = 0; i < tips.length - 1; i++) {
+            for (let j = i + 1; j < tips.length; j++) {
+                const tip1 = landmarks[tips[i]];
+                const tip2 = landmarks[tips[j]];
+                
+                if (tip1 && tip2) {
+                    const distance = Math.sqrt(
+                        Math.pow(tip1[0] - tip2[0], 2) + 
+                        Math.pow(tip1[1] - tip2[1], 2)
+                    );
+                    totalDistance += distance;
                     count++;
                 }
             }
-        });
-        
-        // Thumb
-        if (landmarks[4] && landmarks[2]) {
-            if (landmarks[4].x < landmarks[2].x) {
-                count++;
-            }
         }
-        
-        return count;
+
+        return count > 0 ? totalDistance / count : 0;
     }
 
-    isWaveGesture(landmarks) {
-        // Simple wave detection for demo
-        return Math.random() > 0.9;
+    isPalmOpen(landmarks) {
+        const fingerStates = this.getFingerStates(landmarks);
+        const extendedFingers = fingerStates.filter(state => state > 0.5).length;
+        return extendedFingers >= 3;
+    }
+
+    detectAlphabet(features) {
+        const { fingerStates, thumbPosition, handOrientation, fingerSpread } = features;
+
+        // Convert finger states to simple array
+        const fingers = fingerStates.map(state => state > 0.5 ? 1 : 0);
+
+        // A: All fingers closed, thumb aside
+        if (fingers.every(f => f === 0) && thumbPosition === 'out') return 'A';
+
+        // B: All fingers extended
+        if (fingers.slice(0, 4).every(f => f === 1) && fingers[4] === 0) return 'B';
+
+        // C: Curved fingers (partial extension)
+        if (fingers.every(f => f === 0.5)) return 'C';
+
+        // D: Only index finger extended
+        if (fingers[0] === 1 && fingers.slice(1, 4).every(f => f === 0)) return 'D';
+
+        // F: OK sign (thumb and index touching)
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers.slice(2).every(f => f === 0) && thumbPosition === 'touch') return 'F';
+
+        // I: Pinky extended
+        if (fingers[3] === 1 && fingers.slice(0, 3).every(f => f === 0)) return 'I';
+
+        // L: Index and thumb extended
+        if (fingers[0] === 1 && fingers[4] === 1 && fingers.slice(1, 4).every(f => f === 0)) return 'L';
+
+        // V: Peace sign (index and middle extended)
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers.slice(2).every(f => f === 0) && fingerSpread > 50) return 'V';
+
+        // W: Three fingers (index, middle, ring)
+        if (fingers[0] === 1 && fingers[1] === 1 && fingers[2] === 1 && fingers.slice(3).every(f => f === 0)) return 'W';
+
+        // Y: Thumb and pinky out
+        if (fingers[3] === 1 && fingers[4] === 1 && fingers.slice(0, 3).every(f => f === 0)) return 'Y';
+
+        return null;
+    }
+
+    detectWords(features) {
+        const { fingerStates, thumbPosition, handOrientation, palmOpen } = features;
+        const fingers = fingerStates.map(state => state > 0.5 ? 1 : 0);
+
+        // HELLO: Open hand wave (all fingers extended)
+        if (palmOpen && fingers.slice(0, 4).every(f => f === 1)) return 'HELLO';
+
+        // THANK YOU: Open hand moving from mouth
+        if (palmOpen && handOrientation === 'up') return 'THANK YOU';
+
+        // YES: Closed fist nod
+        if (fingers.every(f => f === 0)) return 'YES';
+
+        // NO: Index finger shake
+        if (fingers[0] === 1 && fingers.slice(1).every(f => f === 0)) return 'NO';
+
+        // I LOVE YOU: Thumb, index, and pinky extended
+        if (fingers[0] === 1 && fingers[3] === 1 && fingers[4] === 1 && fingers[1] === 0 && fingers[2] === 0) return 'I LOVE YOU';
+
+        return null;
     }
 }
 

@@ -294,6 +294,11 @@ body {
     margin-bottom: 2rem;
 }
 
+.dashboard-header h2 {
+    color: var(--primary-color);
+    margin-bottom: 0.5rem;
+}
+
 .translator-container {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -308,16 +313,19 @@ body {
     box-shadow: var(--shadow);
 }
 
+/* Enhanced Camera Styles */
 .camera-container {
     position: relative;
     margin-bottom: 1.5rem;
+    background: #000;
+    border-radius: var(--radius);
+    overflow: hidden;
 }
 
 #video, #overlay {
     width: 100%;
     height: 400px;
-    border-radius: var(--radius);
-    background-color: #000;
+    object-fit: cover;
 }
 
 #overlay {
@@ -332,6 +340,7 @@ body {
     gap: 1rem;
     justify-content: center;
     margin-top: 1rem;
+    flex-wrap: wrap;
 }
 
 .translation-controls {
@@ -356,6 +365,11 @@ body {
     border-radius: var(--radius);
 }
 
+.output-container h3 {
+    margin-bottom: 1rem;
+    color: var(--primary-color);
+}
+
 .translated-text {
     min-height: 150px;
     padding: 1rem;
@@ -363,9 +377,15 @@ body {
     border-radius: var(--radius);
     margin-bottom: 1.5rem;
     background-color: var(--bg-color);
+    font-size: 1.2rem;
+    line-height: 1.6;
 }
 
-.gesture-history {
+.gesture-history h4 {
+    margin-bottom: 1rem;
+}
+
+.gesture-list {
     max-height: 200px;
     overflow-y: auto;
 }
@@ -373,6 +393,145 @@ body {
 .gesture-item {
     padding: 0.5rem;
     border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+}
+
+.gesture-item:last-child {
+    border-bottom: none;
+}
+
+/* Gesture Guide */
+.gesture-guide {
+    margin-top: 2rem;
+    background: var(--white);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    box-shadow: var(--shadow);
+}
+
+.gesture-guide h3 {
+    margin-bottom: 1rem;
+    color: var(--primary-color);
+}
+
+.gesture-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.gesture-card {
+    text-align: center;
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    transition: all 0.3s;
+    background: var(--bg-color);
+}
+
+.gesture-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
+}
+
+.gesture-image {
+    width: 60px;
+    height: 60px;
+    margin: 0 auto 0.5rem;
+    background: var(--primary-color);
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+
+.gesture-letter {
+    font-weight: bold;
+    font-size: 0.9rem;
+}
+
+/* History Items */
+.history-container {
+    background: var(--white);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    box-shadow: var(--shadow);
+}
+
+.history-item {
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    margin-bottom: 1rem;
+    background: var(--white);
+}
+
+.history-gesture {
+    font-weight: bold;
+    color: var(--primary-color);
+    margin-bottom: 0.5rem;
+}
+
+.history-text {
+    margin-bottom: 0.5rem;
+}
+
+.history-time {
+    font-size: 0.8rem;
+    color: var(--text-light);
+}
+
+/* Profile Page */
+.profile-info {
+    text-align: left;
+}
+
+.profile-info .form-group {
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    background: var(--bg-color);
+}
+
+.profile-info label {
+    font-weight: bold;
+    color: var(--text-light);
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+.profile-info p {
+    font-size: 1.1rem;
+    color: var(--text-color);
+}
+
+/* About Page */
+.about-content {
+    background: var(--white);
+    border-radius: var(--radius);
+    padding: 2rem;
+    box-shadow: var(--shadow);
+    line-height: 1.8;
+}
+
+.about-content h3 {
+    color: var(--primary-color);
+    margin: 1.5rem 0 1rem 0;
+}
+
+.about-content ul {
+    margin-left: 2rem;
+    margin-bottom: 1.5rem;
+}
+
+.about-content li {
+    margin-bottom: 0.5rem;
 }
 
 /* Modal */
@@ -447,11 +606,34 @@ body {
         font-size: 2.2rem;
     }
     
+    .hero-buttons {
+        justify-content: center;
+    }
+    
     .translator-container {
         grid-template-columns: 1fr;
     }
     
     .translation-controls {
         grid-template-columns: 1fr;
+    }
+    
+    .camera-controls {
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    .camera-controls .btn {
+        width: 200px;
+    }
+    
+    .gesture-grid {
+        grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    }
+    
+    .form-options {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
     }
 }
