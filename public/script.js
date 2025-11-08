@@ -498,8 +498,14 @@ class SignSpeakApp {
                 <div class="translator-container">
                     <div class="camera-section">
                         <div class="camera-container">
-                            <video id="video" autoplay playsinline></video>
+                            <video id="video" autoplay playsinline muted></video>
                             <canvas id="overlay"></canvas>
+                            <div id="detectedBadge" class="detected-badge">No gesture</div>
+                            <div style="position:absolute; left:18px; top:18px; z-index:40;">
+                                <select id="cameraSelect" style="padding:6px 8px; border-radius:8px; border:1px solid var(--border-color); background:var(--white);">
+                                    <option value="">Default camera</option>
+                                </select>
+                            </div>
                             <div class="camera-controls">
                                 <button id="startCamera" class="btn btn-primary">Start Camera</button>
                                 <button id="stopCamera" class="btn btn-secondary" disabled>Stop Camera</button>
@@ -982,6 +988,22 @@ class SignSpeakApp {
         document.getElementById('speakText').addEventListener('click', () => this.speakText());
         document.getElementById('clearText').addEventListener('click', () => this.clearText());
 
+        // Populate camera list and listen for selection changes
+        this.populateCameraList();
+        const cameraSelect = document.getElementById('cameraSelect');
+        if (cameraSelect) {
+            cameraSelect.addEventListener('change', () => {
+                // If camera is running, restart with new device
+                if (this.isCameraOn) {
+                    this.stopCamera();
+                    setTimeout(() => this.startCamera(), 200);
+                }
+            });
+        }
+
+        // Initialize MediaPipe Hands pipeline in background (used if available)
+        this.initializeMediaPipe();
+
         // Setup voice selection
         this.setupVoiceSelection();
 
@@ -1005,15 +1027,21 @@ class SignSpeakApp {
                 throw new Error('Camera API not supported in this browser');
             }
 
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { 
-                    width: { ideal: 640 },
-                    height: { ideal: 480 },
-                    facingMode: 'user'
-                } 
-            });
-            
+            // Use the selected camera device if provided
+            const cameraSelect = document.getElementById('cameraSelect');
+            let constraints = { video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } };
+            if (cameraSelect && cameraSelect.value) {
+                constraints = { video: { deviceId: { exact: cameraSelect.value }, width: { ideal: 640 }, height: { ideal: 480 } } };
+            }
+
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
             this.video.srcObject = stream;
+            // Ensure video plays (some browsers require explicit play)
+            try {
+                await this.video.play();
+            } catch (playErr) {
+                console.warn('Video play() error (may be autoplay policy):', playErr);
+            }
             this.isCameraOn = true;
             
             // Wait for video to load
@@ -1030,7 +1058,29 @@ class SignSpeakApp {
             document.getElementById('captureGesture').disabled = false;
 
             // Start hand detection
-            this.detectHands();
+            // If MediaPipe Hands is available, use its camera helper for improved landmarks
+            if (this.hands && window.Camera) {
+                // stop any previous mp camera
+                if (this._mpCamera && this._mpCamera.stop) {
+                    try { this._mpCamera.stop(); } catch(e){}
+                    this._mpCamera = null;
+                }
+
+                this._mpCamera = new Camera(this.video, {
+                    onFrame: async () => {
+                        try { await this.hands.send({ image: this.video }); } catch(e) { /* ignore */ }
+                    },
+                    width: this.video.videoWidth || 640,
+                    height: this.video.videoHeight || 480
+                });
+                this._mpCamera.start();
+            } else {
+                // Ensure model is loaded before starting detection (handpose fallback)
+                if (!this.handposeModel) {
+                    await this.initializeHandpose();
+                }
+                this.detectHands();
+            }
             
         } catch (error) {
             console.error('Error accessing camera:', error);
@@ -1089,6 +1139,11 @@ class SignSpeakApp {
         document.getElementById('startCamera').disabled = false;
         document.getElementById('stopCamera').disabled = true;
         document.getElementById('captureGesture').disabled = true;
+        // Stop MediaPipe camera helper if running
+        if (this._mpCamera && this._mpCamera.stop) {
+            try { this._mpCamera.stop(); } catch (e) { console.warn('Error stopping MediaPipe camera', e); }
+            this._mpCamera = null;
+        }
     }
 
     async detectHands() {
@@ -1127,6 +1182,8 @@ class SignSpeakApp {
                     // Try to detect gesture
                     const gesture = this.gestureDetector.detectGesture(keypoints);
                     if (gesture) {
+                        // Show detected badge immediately
+                        this.showDetected(gesture);
                         this.addToText(gesture);
                     }
                 }
@@ -1181,6 +1238,93 @@ class SignSpeakApp {
         const gestures = ['A', 'B', 'C', 'Hello', 'Thank You', 'Yes', 'No', 'Please', 'I LOVE YOU'];
         const randomGesture = gestures[Math.floor(Math.random() * gestures.length)];
         this.addToText(randomGesture);
+    }
+
+    showDetected(gesture) {
+        const badge = document.getElementById('detectedBadge');
+        if (!badge) return;
+        badge.textContent = gesture;
+        badge.style.transform = 'scale(1.02)';
+        badge.style.transition = 'transform 120ms ease-out';
+        // clear after 2s
+        clearTimeout(this._detectedTimeout);
+        this._detectedTimeout = setTimeout(() => {
+            if (this.currentText) {
+                badge.textContent = this.currentText.split(' ').slice(-1)[0] || 'No gesture';
+            } else {
+                badge.textContent = 'No gesture';
+            }
+            badge.style.transform = 'scale(1)';
+        }, 2000);
+    }
+
+    // Populate camera device select element
+    async populateCameraList() {
+        try {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const cameras = devices.filter(d => d.kind === 'videoinput');
+            const select = document.getElementById('cameraSelect');
+            if (!select) return;
+            // Clear existing
+            const current = select.value;
+            select.innerHTML = `<option value="">Default camera</option>`;
+            cameras.forEach((cam, idx) => {
+                const opt = document.createElement('option');
+                opt.value = cam.deviceId;
+                opt.textContent = cam.label || `Camera ${idx + 1}`;
+                select.appendChild(opt);
+            });
+            if (current) select.value = current;
+        } catch (err) {
+            console.warn('Could not enumerate devices', err);
+        }
+    }
+
+    // Initialize MediaPipe Hands and set onResults handler
+    initializeMediaPipe() {
+        try {
+            if (!window.Hands) {
+                console.info('MediaPipe Hands not available (will use handpose fallback)');
+                return;
+            }
+
+            this.hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+            this.hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.5
+            });
+
+            this.hands.onResults((results) => {
+                if (!this.ctx || !this.canvas) return;
+                this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    const landmarks = results.multiHandLandmarks[0];
+                    // Convert normalized landmarks to pixel coordinates
+                    const pixelLandmarks = landmarks.map(lm => [lm.x * this.canvas.width, lm.y * this.canvas.height]);
+
+                    // Draw landmarks
+                    this.ctx.fillStyle = '#00ff00';
+                    for (let i = 0; i < pixelLandmarks.length; i++) {
+                        const [x, y] = pixelLandmarks[i];
+                        this.ctx.beginPath();
+                        this.ctx.arc(x, y, 4, 0, 2 * Math.PI);
+                        this.ctx.fill();
+                    }
+                    this.drawConnections(pixelLandmarks);
+
+                    const gesture = this.gestureDetector.detectGesture(pixelLandmarks);
+                    if (gesture) {
+                        this.showDetected(gesture);
+                        this.addToText(gesture);
+                    }
+                }
+            });
+        } catch (err) {
+            console.warn('Error initializing MediaPipe Hands:', err);
+        }
     }
 
     addToText(gesture) {
