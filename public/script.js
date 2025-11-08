@@ -10,7 +10,14 @@ class SignSpeakApp {
         this.currentText = '';
         this.gestureHistory = [];
         this.sessionId = this.generateSessionId();
-        this.gestureDetector = new GestureDetector();
+    this.gestureDetector = new GestureDetector();
+    // KNN classifier samples for landmarks
+    this.knnSamples = []; // { label: string, vector: Float32Array }
+    this.knnK = 3;
+    this.useKNN = false; // toggle to use ML classifier over rule-based
+    this.knnTrained = false;
+    this._recording = false;
+    this._currentRecordLabel = null;
         this.scrollToSection = null; // For storing section to scroll to after navigation
         
         this.init();
@@ -27,6 +34,8 @@ class SignSpeakApp {
         
         // Initialize handpose model in background
         this.initializeHandpose();
+        // Load any saved KNN samples
+        this.loadKnnSamples();
     }
 
     setupEventListeners() {
@@ -540,6 +549,26 @@ class SignSpeakApp {
                                 <button id="speakText" class="btn btn-accent" disabled>Speak Text</button>
                                 <button id="clearText" class="btn btn-secondary">Clear Text</button>
                             </div>
+                        
+                            <div class="control-group" id="trainingPanel">
+                                <h4 style="margin-bottom:8px">Train Custom Classifier</h4>
+                                <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+                                    <input id="sampleLabel" placeholder="Label (e.g. A, HELLO)" style="padding:8px; border-radius:8px; border:1px solid var(--border-color);" />
+                                    <button id="startRecord" class="btn btn-secondary">Start Record</button>
+                                    <button id="stopRecord" class="btn btn-primary" disabled>Stop Record</button>
+                                </div>
+                                <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+                                    <button id="trainKnn" class="btn btn-accent">Train KNN</button>
+                                    <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="useKnn"/> Use ML classifier</label>
+                                    <button id="clearSamples" class="btn btn-secondary">Clear Samples</button>
+                                </div>
+                                <div style="font-size:0.9rem; color:var(--text-lighter);">Samples: <span id="sampleCount">0</span></div>
+                                <div style="margin-top:8px;">
+                                    <button id="exportSamples" class="btn btn-secondary">Export Samples</button>
+                                    <button id="importSamples" class="btn btn-secondary">Import Samples</button>
+                                    <input id="importFile" type="file" accept="application/json" style="display:none" />
+                                </div>
+                            </div>
                         </div>
                     </div>
                     
@@ -1018,6 +1047,28 @@ class SignSpeakApp {
                 rateValue.textContent = speechRate.value;
             });
         }
+
+        // Training UI bindings
+        const startBtn = document.getElementById('startRecord');
+        const stopBtn = document.getElementById('stopRecord');
+        const trainBtn = document.getElementById('trainKnn');
+        const clearBtn = document.getElementById('clearSamples');
+        const useKnnCb = document.getElementById('useKnn');
+        const exportBtn = document.getElementById('exportSamples');
+        const importBtn = document.getElementById('importSamples');
+        const importFile = document.getElementById('importFile');
+
+        if (startBtn) startBtn.addEventListener('click', () => this.startRecording());
+        if (stopBtn) stopBtn.addEventListener('click', () => this.stopRecording());
+        if (trainBtn) trainBtn.addEventListener('click', () => this.trainKnn());
+        if (clearBtn) clearBtn.addEventListener('click', () => this.clearKnnSamples());
+        if (useKnnCb) useKnnCb.addEventListener('change', (e) => { this.useKNN = e.target.checked; });
+        if (exportBtn) exportBtn.addEventListener('click', () => this.exportKnnSamples());
+        if (importBtn && importFile) importBtn.addEventListener('click', () => importFile.click());
+        if (importFile) importFile.addEventListener('change', (e) => {
+            const f = e.target.files && e.target.files[0];
+            if (f) this.importKnnSamples(f);
+        });
     }
 
     async startCamera() {
@@ -1179,7 +1230,32 @@ class SignSpeakApp {
                     // Draw connections with different colors
                     this.drawConnections(keypoints);
                     
-                    // Try to detect gesture
+                    // Capture sample if recording
+                    this.captureSampleIfRecording(keypoints);
+
+                    // Convert pixel keypoints to normalized coords for direct heuristics
+                    const normalizedLandmarks = keypoints.map(([x, y]) => ({ x: x / this.canvas.width, y: y / this.canvas.height }));
+
+                    // Try direct converted heuristics first
+                    const directGesture = this.detectGestureFromNormalizedLandmarks(normalizedLandmarks);
+                    if (directGesture) {
+                        this.showDetected(directGesture);
+                        this.addToText(directGesture);
+                        continue;
+                    }
+
+                    // Try ML classifier first if enabled
+                    if (this.useKNN && this.knnSamples && this.knnSamples.length > 3) {
+                        const vec = this.normalizeLandmarks(keypoints);
+                        const cls = this.classifyKnn(vec);
+                        if (cls && cls.label && cls.confidence > 0.6) {
+                            this.showDetected(cls.label);
+                            this.addToText(cls.label);
+                            continue;
+                        }
+                    }
+
+                    // Fallback to rule-based
                     const gesture = this.gestureDetector.detectGesture(keypoints);
                     if (gesture) {
                         // Show detected badge immediately
@@ -1258,6 +1334,166 @@ class SignSpeakApp {
         }, 2000);
     }
 
+    // Normalize landmarks into a flat vector anchored at wrist and scaled by hand width
+    normalizeLandmarks(landmarks) {
+        // landmarks: array of [x,y]
+        if (!landmarks || landmarks.length === 0) return null;
+        const wrist = landmarks[0];
+        // compute hand width between index mcp (5) and pinky mcp (17)
+        const indexMcp = landmarks[5] || wrist;
+        const pinkyMcp = landmarks[17] || wrist;
+        const handWidth = Math.hypot(indexMcp[0] - pinkyMcp[0], indexMcp[1] - pinkyMcp[1]) || 1;
+
+        const vec = [];
+        for (let i = 0; i < landmarks.length; i++) {
+            const dx = (landmarks[i][0] - wrist[0]) / handWidth;
+            const dy = (landmarks[i][1] - wrist[1]) / handWidth;
+            vec.push(dx);
+            vec.push(dy);
+        }
+        return new Float32Array(vec);
+    }
+
+    // Add a sample to KNN dataset
+    addKnnSample(label, vector) {
+        if (!label || !vector) return;
+        this.knnSamples.push({ label, vector: Array.from(vector) });
+        this.saveKnnSamples();
+        this.updateSampleCountUI();
+    }
+
+    saveKnnSamples() {
+        try {
+            localStorage.setItem('knnSamples', JSON.stringify(this.knnSamples));
+        } catch (e) {
+            console.warn('Could not save samples', e);
+        }
+    }
+
+    loadKnnSamples() {
+        try {
+            const raw = localStorage.getItem('knnSamples');
+            if (raw) {
+                this.knnSamples = JSON.parse(raw);
+            }
+        } catch (e) {
+            console.warn('Could not load samples', e);
+            this.knnSamples = [];
+        }
+        this.updateSampleCountUI();
+    }
+
+    updateSampleCountUI() {
+        const el = document.getElementById('sampleCount');
+        if (el) el.textContent = String(this.knnSamples.length);
+    }
+
+    // Simple KNN classifier (Euclidean) on normalized vectors
+    classifyKnn(vector) {
+        if (!vector || !this.knnSamples || this.knnSamples.length === 0) return null;
+        const k = Math.min(this.knnK, this.knnSamples.length);
+        const scores = [];
+        for (let i = 0; i < this.knnSamples.length; i++) {
+            const s = this.knnSamples[i];
+            const a = s.vector;
+            let dist = 0;
+            for (let j = 0; j < vector.length && j < a.length; j++) {
+                const d = vector[j] - a[j];
+                dist += d * d;
+            }
+            scores.push({ label: s.label, dist });
+        }
+        scores.sort((x, y) => x.dist - y.dist);
+        const top = scores.slice(0, k);
+        // Majority vote
+        const counts = {};
+        top.forEach(t => { counts[t.label] = (counts[t.label] || 0) + 1; });
+        const sortedLabels = Object.keys(counts).sort((a,b) => counts[b]-counts[a]);
+        const winner = sortedLabels[0];
+        // confidence: 1 - normalized distance of mean top dist
+        const meanDist = top.reduce((s,t) => s + t.dist, 0) / top.length;
+        const confidence = Math.max(0, 1 - Math.min(1, meanDist));
+        return { label: winner, confidence };
+    }
+
+    // Recording helpers
+    startRecording() {
+        const labelInput = document.getElementById('sampleLabel');
+        if (!labelInput || !labelInput.value.trim()) {
+            this.showMessage('Please enter a label before recording', 'error');
+            return;
+        }
+        this._currentRecordLabel = labelInput.value.trim();
+        this._recording = true;
+        document.getElementById('startRecord').disabled = true;
+        document.getElementById('stopRecord').disabled = false;
+        this.showMessage(`Recording samples for "${this._currentRecordLabel}" — perform gesture now`, 'info');
+    }
+
+    stopRecording() {
+        this._recording = false;
+        document.getElementById('startRecord').disabled = false;
+        document.getElementById('stopRecord').disabled = true;
+        this.showMessage(`Stopped recording for "${this._currentRecordLabel}"`, 'success');
+        this._currentRecordLabel = null;
+    }
+
+    // Called when landmarks are available; if recording active, capture sample
+    captureSampleIfRecording(landmarks) {
+        if (!this._recording || !landmarks) return;
+        const vec = this.normalizeLandmarks(landmarks);
+        if (vec) this.addKnnSample(this._currentRecordLabel, vec);
+    }
+
+    // Train is trivial for KNN (just enable)
+    trainKnn() {
+        if (!this.knnSamples || this.knnSamples.length < 5) {
+            this.showMessage('Collect at least 5 samples total before training', 'error');
+            return;
+        }
+        this.knnTrained = true;
+        this.showMessage('KNN ready. Toggle "Use ML classifier" to enable.', 'success');
+    }
+
+    clearKnnSamples() {
+        this.knnSamples = [];
+        this.saveKnnSamples();
+        this.updateSampleCountUI();
+        this.showMessage('All KNN samples cleared', 'info');
+    }
+
+    exportKnnSamples() {
+        const data = JSON.stringify(this.knnSamples);
+        const blob = new Blob([data], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'knn-samples.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    }
+
+    importKnnSamples(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const data = JSON.parse(e.target.result);
+                if (Array.isArray(data)) {
+                    this.knnSamples = data;
+                    this.saveKnnSamples();
+                    this.updateSampleCountUI();
+                    this.showMessage('Imported samples successfully', 'success');
+                } else {
+                    this.showMessage('Invalid sample file', 'error');
+                }
+            } catch (err) {
+                this.showMessage('Error importing samples', 'error');
+            }
+        };
+        reader.readAsText(file);
+    }
+
     // Populate camera device select element
     async populateCameraList() {
         try {
@@ -1301,9 +1537,11 @@ class SignSpeakApp {
                 this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
                 if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-                    const landmarks = results.multiHandLandmarks[0];
-                    // Convert normalized landmarks to pixel coordinates
-                    const pixelLandmarks = landmarks.map(lm => [lm.x * this.canvas.width, lm.y * this.canvas.height]);
+                const landmarks = results.multiHandLandmarks[0];
+                // landmarks here are normalized (x,y in 0..1)
+                const normalizedLandmarks = landmarks.map(lm => ({ x: lm.x, y: lm.y }));
+                // Convert normalized landmarks to pixel coordinates for drawing
+                const pixelLandmarks = landmarks.map(lm => [lm.x * this.canvas.width, lm.y * this.canvas.height]);
 
                     // Draw landmarks
                     this.ctx.fillStyle = '#00ff00';
@@ -1315,16 +1553,134 @@ class SignSpeakApp {
                     }
                     this.drawConnections(pixelLandmarks);
 
-                    const gesture = this.gestureDetector.detectGesture(pixelLandmarks);
-                    if (gesture) {
-                        this.showDetected(gesture);
-                        this.addToText(gesture);
+                    // Capture sample if recording (use pixel landmarks)
+                    this.captureSampleIfRecording(pixelLandmarks);
+
+                    // First try the direct converted-Python heuristics on normalized landmarks
+                    const directGesture = this.detectGestureFromNormalizedLandmarks(normalizedLandmarks);
+                    if (directGesture) {
+                        this.showDetected(directGesture);
+                        this.addToText(directGesture);
+                        return;
+                    }
+
+                    // If ML classifier enabled and samples exist, prefer it
+                    if (this.useKNN && this.knnSamples && this.knnSamples.length > 3) {
+                        const vec = this.normalizeLandmarks(pixelLandmarks);
+                        const cls = this.classifyKnn(vec);
+                        if (cls && cls.label && cls.confidence > 0.6) {
+                            this.showDetected(cls.label);
+                            this.addToText(cls.label);
+                        }
+                    } else {
+                        const gesture = this.gestureDetector.detectGesture(pixelLandmarks);
+                        if (gesture) {
+                            this.showDetected(gesture);
+                            this.addToText(gesture);
+                        }
                     }
                 }
             });
         } catch (err) {
             console.warn('Error initializing MediaPipe Hands:', err);
         }
+    }
+
+    // Converted gesture heuristics ported from provided Python MediaPipe example.
+    // Accepts normalized landmarks array: [{x,y}, ...] where indices follow MediaPipe convention.
+    detectGestureFromNormalizedLandmarks(lm) {
+        if (!lm || lm.length < 21) return null;
+
+        const finger_tips = [8, 12, 16, 20];
+        const thumb_tip = 4;
+
+        // Build simple finger fold status: tip.x < pip.x (using tip-3 index similar to Python)
+        const finger_fold_status = [];
+        for (let tip of finger_tips) {
+            const tipX = lm[tip].x;
+            const baseX = lm[tip - 3].x;
+            finger_fold_status.push(tipX < baseX);
+        }
+
+        // LIKE (thumbs-up)
+        if (lm[thumb_tip].y < lm[thumb_tip - 1].y && lm[thumb_tip - 1].y < lm[thumb_tip - 2].y) {
+            if (finger_fold_status.every(s => s)) return 'LIKE';
+        }
+
+        // DISLIKE (thumbs-down)
+        if (lm[thumb_tip].y > lm[thumb_tip - 1].y && lm[thumb_tip - 1].y > lm[thumb_tip - 2].y) {
+            if (finger_fold_status.every(s => s)) return 'DISLIKE';
+        }
+
+        // OK: thumb and index close, other three extended
+        const thumb_x = lm[thumb_tip].x, thumb_y = lm[thumb_tip].y;
+        const index_x = lm[8].x, index_y = lm[8].y;
+        const distance_thumb_index = Math.hypot(thumb_x - index_x, thumb_y - index_y);
+        if (distance_thumb_index < 0.05) {
+            if (!finger_fold_status[0] && !finger_fold_status[1] && !finger_fold_status[2]) return 'OK';
+        }
+
+        // PEACE: thumb, ring, pinky close; index and middle extended
+        const ring_x = lm[16].x, ring_y = lm[16].y;
+        const pinky_x = lm[20].x, pinky_y = lm[20].y;
+        const dist_thumb_ring = Math.hypot(thumb_x - ring_x, thumb_y - ring_y);
+        const dist_ring_pinky = Math.hypot(ring_x - pinky_x, ring_y - pinky_y);
+        if (dist_thumb_ring < 0.05 && dist_ring_pinky < 0.05) {
+            if (!finger_fold_status[0] && !finger_fold_status[1]) return 'PEACE';
+        }
+
+        // CALL ME: index, middle, pinky folded; thumb and pinky extended and far apart
+        if (finger_fold_status[0] && finger_fold_status[1] && finger_fold_status[3]) {
+            const dist_thumb_pinky = Math.hypot(thumb_x - pinky_x, thumb_y - pinky_y);
+            if (dist_thumb_pinky > 0.4) return 'CALL ME';
+        }
+
+        // STOP: all fingers extended (upwards) - check y ordering
+        const condStop = (lm[thumb_tip].y < lm[thumb_tip - 1].y && lm[thumb_tip - 1].y < lm[thumb_tip - 2].y) &&
+            (lm[8].y < lm[6].y && lm[6].y < lm[5].y) &&
+            (lm[12].y < lm[10].y && lm[10].y < lm[9].y) &&
+            (lm[16].y < lm[14].y && lm[14].y < lm[13].y) &&
+            (lm[20].y < lm[18].y && lm[18].y < lm[17].y);
+        if (condStop) return 'STOP';
+
+        // FORWARD: index extended up, others folded and thumb on certain side
+        if (lm[8].y < lm[6].y && lm[6].y < lm[5].y &&
+            lm[12].y > lm[11].y && lm[11].y > lm[10].y &&
+            lm[16].y > lm[15].y && lm[15].y > lm[14].y &&
+            lm[20].y > lm[19].y && lm[19].y > lm[18].y &&
+            lm[thumb_tip].x > lm[thumb_tip - 1].x) {
+            return 'FORWARD';
+        }
+
+        // LEFT: heuristics from Python
+        if (lm[4].y < lm[2].y &&
+            lm[8].x < lm[6].x &&
+            lm[12].x > lm[10].x &&
+            lm[16].x > lm[14].x &&
+            lm[20].x > lm[18].x &&
+            lm[5].x < lm[0].x) {
+            return 'LEFT';
+        }
+
+        // RIGHT
+        if (lm[4].y < lm[2].y &&
+            lm[8].x > lm[6].x &&
+            lm[12].x < lm[10].x &&
+            lm[16].x < lm[14].x &&
+            lm[20].x < lm[18].x) {
+            return 'RIGHT';
+        }
+
+        // I LOVE YOU: index and pinky up, thumb extended, middle & ring folded
+        if (lm[8].y < lm[6].y &&
+            lm[12].y > lm[11].y &&
+            lm[16].y > lm[15].y &&
+            lm[20].y < lm[19].y &&
+            lm[thumb_tip].x > lm[thumb_tip - 1].x) {
+            return 'I LOVE YOU';
+        }
+
+        return null;
     }
 
     addToText(gesture) {
