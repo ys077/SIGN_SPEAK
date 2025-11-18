@@ -1,11 +1,11 @@
 {
-  "name": "sign-language-converter",
+  "name": "signspeak-server",
   "version": "1.0.0",
-  "description": "Real-time Sign Language to Text Converter",
-  "main": "server/app.js",
+  "description": "Backend for SignSpeak - Real-time Sign Language to Text Converter",
+  "main": "app.js",
   "scripts": {
-    "start": "node server/app.js",
-    "dev": "nodemon server/app.js",
+    "start": "node app.js",
+    "dev": "nodemon app.js",
     "build": "npm install",
     "test": "node test-db.js"
   },
@@ -14,8 +14,7 @@
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.2",
-    "mongoose": "^7.5.0",
-    "serverless-http": "^3.2.0"
+    "mongoose": "^7.5.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

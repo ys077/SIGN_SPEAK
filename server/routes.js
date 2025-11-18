@@ -1,10 +1,26 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { User, History } = require('../database/mongoSchema');
+const { User, History } = require('./database/mongoSchema');
 
 const router = express.Router();
 const JWT_SECRET = 'signspeak-secret-key-2024';
+
+// Middleware to verify token
+const auth = async (req, res, next) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    if (!token) {
+      return res.status(401).json({ error: 'No token, authorization denied' });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    res.status(401).json({ error: 'Token is not valid' });
+  }
+};
 
 // Register
 router.post('/register', async (req, res) => {
@@ -98,7 +114,7 @@ router.post('/login', async (req, res) => {
 });
 
 // Get user profile
-router.get('/user/:userId', async (req, res) => {
+router.get('/user/:userId', auth, async (req, res) => {
   try {
     const user = await User.findById(req.params.userId).select('-password');
     if (!user) {
@@ -111,7 +127,7 @@ router.get('/user/:userId', async (req, res) => {
 });
 
 // Update user preferences
-router.put('/user/:userId/preferences', async (req, res) => {
+router.put('/user/:userId/preferences', auth, async (req, res) => {
   try {
     const user = await User.findByIdAndUpdate(
       req.params.userId,
@@ -130,7 +146,7 @@ router.put('/user/:userId/preferences', async (req, res) => {
 });
 
 // History routes
-router.get('/history/:userId', async (req, res) => {
+router.get('/history/:userId', auth, async (req, res) => {
   try {
     const history = await History.find({ userId: req.params.userId })
       .sort({ timestamp: -1 })
@@ -141,7 +157,7 @@ router.get('/history/:userId', async (req, res) => {
   }
 });
 
-router.post('/history', async (req, res) => {
+router.post('/history', auth, async (req, res) => {
   try {
     const history = new History(req.body);
     await history.save();
@@ -155,7 +171,7 @@ router.post('/history', async (req, res) => {
   }
 });
 
-router.delete('/history/:id', async (req, res) => {
+router.delete('/history/:id', auth, async (req, res) => {
   try {
     await History.findByIdAndDelete(req.params.id);
     res.json({ success: true, message: 'History deleted successfully' });

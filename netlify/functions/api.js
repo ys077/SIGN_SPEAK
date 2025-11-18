@@ -2,7 +2,6 @@ const express = require('express');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const serverless = require('serverless-http');
 
 const app = express();
 
@@ -133,4 +132,5 @@ app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'API is running', timestamp: new Date().toISOString() });
 });
 
-module.exports.handler = serverless(app);
+// For Netlify Functions, export the app directly
+module.exports = app;

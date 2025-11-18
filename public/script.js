@@ -1073,37 +1073,161 @@ class SignSpeakApp {
 
     async startCamera() {
         try {
+            // Reset any existing streams
+            if (this.video && this.video.srcObject) {
+                const tracks = this.video.srcObject.getTracks();
+                tracks.forEach(track => track.stop());
+                this.video.srcObject = null;
+            }
+
+            // Show loading state and disable button
+            this.showMessage('Starting camera...', 'info');
+            document.getElementById('startCamera').disabled = true;
+            
+            // Debug info
+            console.log('Browser:', navigator.userAgent);
+            console.log('Checking camera support...');
+
             // Check if browser supports media devices
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                 throw new Error('Camera API not supported in this browser');
             }
+            
+            // List available devices
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(device => device.kind === 'videoinput');
+            console.log('Available cameras:', videoDevices.length);
+            videoDevices.forEach(device => {
+                console.log(`- Camera: ${device.label || 'Unnamed camera'} (${device.deviceId})`);
+            });
 
             // Use the selected camera device if provided
             const cameraSelect = document.getElementById('cameraSelect');
-            let constraints = { video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' } };
-            if (cameraSelect && cameraSelect.value) {
-                constraints = { video: { deviceId: { exact: cameraSelect.value }, width: { ideal: 640 }, height: { ideal: 480 } } };
+            
+            // Try different camera configurations in order
+            const cameraConfigs = [
+                // First try selected or user-facing camera
+                {
+                    video: {
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        facingMode: 'user',
+                        deviceId: cameraSelect && cameraSelect.value ? { exact: cameraSelect.value } : undefined
+                    },
+                    audio: false
+                },
+                // Then try any camera
+                {
+                    video: {
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    },
+                    audio: false
+                },
+                // Finally try with minimal constraints
+                {
+                    video: true,
+                    audio: false
+                }
+            ];
+
+            let stream;
+            let lastError;
+            
+            // Try each camera configuration
+            for (let constraints of cameraConfigs) {
+                try {
+                    console.log('Trying camera config:', JSON.stringify(constraints));
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    console.log('Successfully got stream with config:', JSON.stringify(constraints));
+                    break; // Exit loop if successful
+                } catch (e) {
+                    console.warn('Camera attempt failed:', e.name, e.message);
+                    lastError = e;
+                }
             }
 
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
-            this.video.srcObject = stream;
-            // Ensure video plays (some browsers require explicit play)
-            try {
-                await this.video.play();
-            } catch (playErr) {
-                console.warn('Video play() error (may be autoplay policy):', playErr);
+            if (!stream) {
+                throw new Error(`Could not get camera stream. Last error: ${lastError?.message || 'Unknown error'}`);
             }
+
+            this.video.srcObject = stream;
+            
+            // Set size explicitly
+            this.video.width = 640;
+            this.video.height = 480;
+            
+            console.log('Waiting for video metadata...');
+            // Wait for loadedmetadata before playing
+            await new Promise((resolve) => {
+                const handleMetadata = () => {
+                    console.log('Video metadata loaded:', {
+                        width: this.video.videoWidth,
+                        height: this.video.videoHeight,
+                        readyState: this.video.readyState
+                    });
+                    resolve();
+                };
+                
+                if (this.video.readyState >= 1) { // HAVE_METADATA
+                    handleMetadata();
+                } else {
+                    this.video.onloadedmetadata = handleMetadata;
+                    // Timeout after 5s in case event never fires
+                    setTimeout(() => {
+                        console.log('Metadata timeout - continuing anyway');
+                        resolve();
+                    }, 5000);
+                }
+            });
+
+            try {
+                console.log('Attempting to play video...');
+                await this.video.play();
+                console.log('Video playback started successfully');
+            } catch (playErr) {
+                console.warn('Video play() error:', playErr);
+                // Check if it's an autoplay issue
+                if (playErr.name === 'NotAllowedError') {
+                    this.showMessage('Autoplay blocked. Please click the video area once to start.', 'info');
+                    
+                    // Add one-time click handler to start video
+                    const clickHandler = async () => {
+                        try {
+                            await this.video.play();
+                            this.video.removeEventListener('click', clickHandler);
+                        } catch (e) {
+                            console.error('Play on click failed:', e);
+                        }
+                    };
+                    this.video.addEventListener('click', clickHandler);
+                    
+                    // Don't throw, let user click to start
+                    console.log('Waiting for user interaction to start video');
+                } else {
+                    throw new Error(`Could not start video playback: ${playErr.message}`);
+                }
+            }
+
             this.isCameraOn = true;
             
-            // Wait for video to load
-            this.video.addEventListener('loadedmetadata', () => {
-                // Set canvas dimensions to match video
+            // Setup canvas once video is ready
+            const setupCanvas = () => {
                 this.canvas.width = this.video.videoWidth;
                 this.canvas.height = this.video.videoHeight;
-                
                 console.log('Camera started:', this.video.videoWidth, 'x', this.video.videoHeight);
-            });
-            
+                this.showMessage('Camera started successfully', 'success');
+            };
+
+            // Either set up canvas now if video dimensions are available,
+            // or wait for the event
+            if (this.video.videoWidth) {
+                setupCanvas();
+            } else {
+                this.video.addEventListener('loadedmetadata', setupCanvas);
+            }
+
+            // Update UI
             document.getElementById('startCamera').disabled = true;
             document.getElementById('stopCamera').disabled = false;
             document.getElementById('captureGesture').disabled = false;
@@ -1121,10 +1245,18 @@ class SignSpeakApp {
                     onFrame: async () => {
                         try { await this.hands.send({ image: this.video }); } catch(e) { /* ignore */ }
                     },
-                    width: this.video.videoWidth || 640,
-                    height: this.video.videoHeight || 480
+                    width: 640,
+                    height: 480
                 });
-                this._mpCamera.start();
+                this._mpCamera.start().catch(e => {
+                    console.warn('MediaPipe camera start failed:', e);
+                    // Fallback to handpose
+                    if (!this.handposeModel) {
+                        this.initializeHandpose().then(() => this.detectHands());
+                    } else {
+                        this.detectHands();
+                    }
+                });
             } else {
                 // Ensure model is loaded before starting detection (handpose fallback)
                 if (!this.handposeModel) {
@@ -1132,19 +1264,24 @@ class SignSpeakApp {
                 }
                 this.detectHands();
             }
+
+            return true;
             
         } catch (error) {
             console.error('Error accessing camera:', error);
+            document.getElementById('startCamera').disabled = false;
+            
             // Provide clearer guidance for common permission errors
             if (error && error.name === 'NotAllowedError') {
-                this.showMessage('Camera access was blocked. Please allow camera access in your browser settings and try again. If using Chrome, click the camera icon in the address bar and Allow.', 'error');
+                this.showMessage('Camera blocked! Click the camera icon in address bar → Allow. Then try again.', 'error');
             } else if (error && (error.name === 'NotFoundError' || error.name === 'OverconstrainedError')) {
-                this.showMessage('No suitable camera found. Please connect a camera and try again.', 'error');
+                this.showMessage('No camera found. Please connect a webcam and try again.', 'error');
             } else if (error && error.name === 'SecurityError') {
-                this.showMessage('Camera access requires a secure context (HTTPS) or localhost. Please run this app on https or localhost.', 'error');
+                this.showMessage('Please use HTTPS or localhost for camera access', 'error');
             } else {
-                this.showMessage(`Camera error: ${error.message}`, 'error');
+                this.showMessage(`Camera error: ${error.message}. Check Windows camera privacy settings.`, 'error');
             }
+            return false;
         }
     }
 
