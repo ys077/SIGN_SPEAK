@@ -1,3 +1,3 @@
 JWT_SECRET=signspeak_secret_key_2023_ai_translation_platform
-MONGODB_URI=mongodb://atlas-sql-690ed4468e20073984d04f01-7dwyqj.a.query.mongodb.net/SIGN_SPEAK?ssl=true&authSource=admin
+MONGODB_URI=MONGODB_URI=mongodb+srv://SIGN_SPEAK:ys%40ys%23ys@cluster0.pcyisoh.mongodb.net/SIGN_SPEAK?retryWrites=true&w=majority
 PORT=5000
