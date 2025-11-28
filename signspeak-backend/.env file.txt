@@ -1,3 +1,4 @@
+MONGODB_URI=mongodb+srv://signspeak_app:signspeak7@cluster0.pcyisoh.mongodb.net/SIGN_SPEAK?retryWrites=true&w=majority
 JWT_SECRET=signspeak_secret_key_2023_ai_translation_platform
-MONGODB_URI=mongodb+srv://signspeak_user:signspeak7@cluster0.pcyisoh.mongodb.net/SIGN_SPEAK?retry
 PORT=5000
+NODE_ENV=production
